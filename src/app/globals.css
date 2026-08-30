@@ -1,0 +1,241 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+  Design tokens translated from the Stitch design system "Dovis Executive"
+  (assets/7126633135085923002).
+
+  Stitch field            -> token here
+  customColor  #0F3D3E    -> --primary          deep ink-teal
+  secondary    #C9A227    -> --secondary        amber, "a decision is waiting on you"
+  tertiary     #8C5A3C    -> --accent           clay
+  neutral      #F7F5F2    -> --background       warm paper
+  roundness    ROUND_EIGHT-> --radius: 0.5rem
+  headlineFont SOURCE_SERIF_4 -> --font-heading
+  bodyFont     IBM_PLEX_SANS  -> --font-sans
+
+  Seed colours are kept as hex so they are byte-identical to what Stitch defined.
+  Everything derived from them is oklch so the scale stays perceptually even.
+*/
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-heading);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+
+  /* Status colours. Bound to queue meaning, never decoration. */
+  --color-status-proposed: var(--status-proposed);
+  --color-status-confirmed: var(--status-confirmed);
+  --color-status-executing: var(--status-executing);
+  --color-status-done: var(--status-done);
+  --color-status-rejected: var(--status-rejected);
+  --color-status-failed: var(--status-failed);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --radius: 0.5rem;
+
+  --background: #f7f5f2;
+  --foreground: oklch(0.24 0.012 160);
+
+  /* Cards sit above the paper ground, not on a white sheet. */
+  --card: oklch(0.995 0.003 85);
+  --card-foreground: oklch(0.24 0.012 160);
+  --popover: oklch(0.995 0.003 85);
+  --popover-foreground: oklch(0.24 0.012 160);
+
+  --primary: #0f3d3e;
+  --primary-foreground: oklch(0.97 0.008 85);
+
+  --secondary: #c9a227;
+  --secondary-foreground: oklch(0.22 0.03 80);
+
+  --accent: #8c5a3c;
+  --accent-foreground: oklch(0.97 0.008 85);
+
+  --muted: oklch(0.945 0.005 85);
+  --muted-foreground: oklch(0.49 0.012 160);
+
+  --destructive: oklch(0.52 0.19 27);
+
+  --border: oklch(0.885 0.006 85);
+  --input: oklch(0.885 0.006 85);
+  --ring: #0f3d3e;
+
+  --status-proposed: oklch(0.42 0.014 160);
+  --status-confirmed: #0f3d3e;
+  --status-executing: #c9a227;
+  --status-done: oklch(0.62 0.008 160);
+  --status-rejected: oklch(0.66 0.006 85);
+  --status-failed: oklch(0.52 0.19 27);
+
+  --chart-1: #0f3d3e;
+  --chart-2: #c9a227;
+  --chart-3: #8c5a3c;
+  --chart-4: oklch(0.55 0.055 195);
+  --chart-5: oklch(0.72 0.045 140);
+
+  --sidebar: oklch(0.975 0.004 85);
+  --sidebar-foreground: oklch(0.24 0.012 160);
+  --sidebar-primary: #0f3d3e;
+  --sidebar-primary-foreground: oklch(0.97 0.008 85);
+  --sidebar-accent: oklch(0.945 0.005 85);
+  --sidebar-accent-foreground: oklch(0.24 0.012 160);
+  --sidebar-border: oklch(0.885 0.006 85);
+  --sidebar-ring: #0f3d3e;
+}
+
+/*
+  Dark is a real palette, not an inversion: the ink-teal becomes the ground and the
+  paper becomes the type. Amber stays amber, because its meaning must not change
+  with the time of day.
+*/
+.dark {
+  --background: oklch(0.19 0.014 190);
+  --foreground: oklch(0.93 0.006 85);
+
+  --card: oklch(0.235 0.016 190);
+  --card-foreground: oklch(0.93 0.006 85);
+  --popover: oklch(0.235 0.016 190);
+  --popover-foreground: oklch(0.93 0.006 85);
+
+  --primary: oklch(0.82 0.075 175);
+  --primary-foreground: oklch(0.19 0.014 190);
+
+  --secondary: #c9a227;
+  --secondary-foreground: oklch(0.19 0.014 190);
+
+  --accent: oklch(0.66 0.075 48);
+  --accent-foreground: oklch(0.19 0.014 190);
+
+  --muted: oklch(0.28 0.014 190);
+  --muted-foreground: oklch(0.71 0.012 85);
+
+  --destructive: oklch(0.62 0.18 27);
+
+  --border: oklch(0.31 0.014 190);
+  --input: oklch(0.31 0.014 190);
+  --ring: oklch(0.82 0.075 175);
+
+  --status-proposed: oklch(0.86 0.008 85);
+  --status-confirmed: oklch(0.82 0.075 175);
+  --status-executing: #c9a227;
+  --status-done: oklch(0.58 0.012 190);
+  --status-rejected: oklch(0.54 0.01 190);
+  --status-failed: oklch(0.65 0.18 27);
+
+  --chart-1: oklch(0.82 0.075 175);
+  --chart-2: #c9a227;
+  --chart-3: oklch(0.66 0.075 48);
+  --chart-4: oklch(0.6 0.06 195);
+  --chart-5: oklch(0.72 0.05 140);
+
+  --sidebar: oklch(0.22 0.015 190);
+  --sidebar-foreground: oklch(0.93 0.006 85);
+  --sidebar-primary: oklch(0.82 0.075 175);
+  --sidebar-primary-foreground: oklch(0.19 0.014 190);
+  --sidebar-accent: oklch(0.28 0.014 190);
+  --sidebar-accent-foreground: oklch(0.93 0.006 85);
+  --sidebar-border: oklch(0.31 0.014 190);
+  --sidebar-ring: oklch(0.82 0.075 175);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    /* Briefings are read, not scanned. Slightly open measure and generous leading. */
+    font-feature-settings: "kern", "liga", "calt";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  .font-heading {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    letter-spacing: -0.011em;
+  }
+}
+
+@layer utilities {
+  /*
+    Paper edge. The queue sits on a sheet that is very slightly lifted off the
+    ground — depth from layering, not from a drop shadow with a blur radius of 40.
+  */
+  .paper {
+    background-color: var(--card);
+    border: 1px solid var(--border);
+    box-shadow:
+      0 1px 0 0 color-mix(in oklab, var(--foreground) 4%, transparent),
+      0 1px 2px -1px color-mix(in oklab, var(--foreground) 8%, transparent);
+  }
+
+  /* Used only on rows in `executing` — motion that says "in progress", nothing else. */
+  @keyframes dovis-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+
+  .animate-working {
+    animation: dovis-pulse 1.6s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-working {
+      animation: none;
+    }
+  }
+}
