@@ -52,3 +52,5 @@ cloudflared/*.json
 
 # Local agent tooling state - never in a public repo
 .omc/
+
+.vercel

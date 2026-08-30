@@ -5,9 +5,16 @@ import { ThemeProvider as NextThemes } from "next-themes";
 import { dict, Lang, LangContext, LANG_STORAGE_KEY } from "@/lib/i18n";
 
 /**
- * Light is the default and the designed-for case — this is read in daylight, and a
- * dark admin theme would make it feel like a tool rather than a briefing. Dark is a
- * real palette for late reading, not an afterthought inversion.
+ * The theme follows the boss's own browser. `defaultTheme="system"` means a device
+ * set to dark opens dark and a device set to light opens light, with no choice to
+ * make on first visit — and next-themes injects a blocking script so the correct
+ * palette paints on the first frame rather than flashing the wrong one.
+ *
+ * The toggle still exists and, once used, wins over the system preference for that
+ * browser. Both palettes are designed: light is warm paper with ink type, dark
+ * makes the ink-teal the ground rather than inverting the light theme. Amber keeps
+ * its meaning in both, because "a decision is waiting on you" must not change with
+ * the time of day.
  */
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = React.useState<Lang>("en");
@@ -31,8 +38,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   return (
     <NextThemes
       attribute="class"
-      defaultTheme="light"
-      enableSystem={false}
+      defaultTheme="system"
+      enableSystem
       disableTransitionOnChange
     >
       <LangContext.Provider value={value}>{children}</LangContext.Provider>

@@ -13,7 +13,13 @@ import { cn } from "@/lib/utils";
 export function Header() {
   const { t, lang, setLang } = useI18n();
   const { session, perms, signOut, demo } = useDovis();
-  const { theme, setTheme } = useTheme();
+  /*
+    `resolvedTheme`, not `theme`. With the system preference enabled, `theme` is
+    the literal string "system" until someone touches the toggle — so keying the
+    icon or the toggle off it would show a moon to a boss already in dark mode,
+    and the first click would appear to do nothing.
+  */
+  const { resolvedTheme, setTheme } = useTheme();
   const pathname = usePathname();
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
@@ -75,9 +81,9 @@ export function Header() {
             size="icon"
             className="size-8"
             aria-label={t.theme}
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
           >
-            {mounted && theme === "dark" ? (
+            {mounted && resolvedTheme === "dark" ? (
               <Sun className="size-4" />
             ) : (
               <Moon className="size-4" />
