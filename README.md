@@ -68,6 +68,37 @@ cp .env.example .env.local
 Fill in all three values. `SUPABASE_SERVICE_ROLE_KEY` has no `NEXT_PUBLIC_`
 prefix and must never get one — it bypasses RLS entirely.
 
+### 2b. Connecting Google (optional, but much nicer than the CLI)
+
+Set the `GOOGLE_*` values in `.env.local` and a **Google account** card appears on the
+Team page. The principal clicks **Connect Google**, approves at Google, and the
+callback writes `.gauth.json`, `.accounts.json` and the token file into the directory
+the MCP server reads.
+
+The credentials land on **this machine**, not in the database and not over a network —
+which is only possible because the dashboard and the agent are the same box. That is
+the whole reason this is worth doing rather than something to be nervous about.
+
+Three things decide whether it works:
+
+1. **The OAuth client must be type "Web application"**, not Desktop, with the redirect
+   URI matching `GOOGLE_REDIRECT_URI` exactly.
+2. **Set the user type to Internal** if the principal has Google Workspace. External +
+   Testing issues a refresh token that expires after 7 days for Gmail scopes, so Dovis
+   stops reading mail weekly and it looks like a broken cron.
+3. **`GOOGLE_TOKEN_FILE_PATTERN` must match what the MCP server looks for.** This is
+   the one value worth verifying rather than trusting: run the server's own CLI auth
+   once, `ls -a` the credentials directory, and copy the filename it produced. A wrong
+   value fails in the worst way — OAuth succeeds, the card says Connected, and the
+   agent still cannot read mail. The card checks for the token file specifically and
+   warns when it authorised but found nothing on disk.
+
+Scopes requested are `gmail.modify`, `calendar` and `userinfo.email` — the smallest set
+that still allows drafting. Gmail has **no draft-only scope** (`gmail.compose` and
+`gmail.modify` both permit sending at the API level), so "Dovis cannot send" is enforced
+where it always was: `gmail_reply` off the tool allowlist, `GMAIL_ALLOW_SENDING` unset.
+Do not add `gmail.send`.
+
 ### 3. Build and run on the box
 
 ```bash

@@ -82,6 +82,14 @@ export const dict = {
       "They lose access immediately. This cannot be undone — you would have to create the account again.",
     dangerZoneHint:
       "Everything here is irreversible and owner-only. Your assistant cannot see or reach any of it.",
+    googleTitle: "Google account",
+    googleNotConnected:
+      "Not connected. Dovis cannot read your mail or calendar until this is done.",
+    googleConnect: "Connect Google",
+    googleReconnect: "Reconnect",
+    googleConnected: "Connected",
+    googleUnavailable:
+      "Google sign-in is not configured on this deployment. It runs only on a real Dovis box, never on the demo.",
     clearCta: "Clear",
     deleteCta: "Delete",
     clearCompleted: "Clear completed items",
@@ -161,6 +169,13 @@ export const dict = {
     removeAdminTitle: "要移除這個帳號嗎？",
     removeAdminBody: "對方會立即失去存取權限。此操作無法復原，只能重新建立帳號。",
     dangerZoneHint: "以下操作皆無法復原，且僅限擁有者。你的助理看不到也碰不到。",
+    googleTitle: "Google 帳號",
+    googleNotConnected: "尚未連結。在完成之前，Dovis 無法讀取你的郵件與行事曆。",
+    googleConnect: "連結 Google",
+    googleReconnect: "重新連結",
+    googleConnected: "已連結",
+    googleUnavailable:
+      "這個部署沒有設定 Google 登入。此功能只在真正的 Dovis 主機上運作，示範站台不會有。",
     clearCta: "清除",
     deleteCta: "刪除",
     clearCompleted: "清除已完成項目",
