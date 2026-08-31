@@ -218,6 +218,26 @@
       0 1px 2px -1px color-mix(in oklab, var(--foreground) 8%, transparent);
   }
 
+  /*
+    Squircle. A plain border-radius corner is a circular arc that meets the straight
+    edge abruptly; a superellipse curves continuously into it, which is why it reads
+    softer at the same visual size.
+
+    `corner-shape` is the real thing but is not everywhere yet, so the base rule is a
+    tuned radius that approximates it and the @supports block upgrades browsers that
+    can do it properly. Nothing depends on the upgrade landing.
+  */
+  .squircle {
+    border-radius: 0.7rem;
+  }
+
+  @supports (corner-shape: superellipse(3)) {
+    .squircle {
+      border-radius: 0.9rem;
+      corner-shape: superellipse(3);
+    }
+  }
+
   /* Used only on rows in `executing` — motion that says "in progress", nothing else. */
   @keyframes dovis-pulse {
     0%,

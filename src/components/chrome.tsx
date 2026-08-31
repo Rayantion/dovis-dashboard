@@ -5,8 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Moon, Sun, Users, LayoutList, LogOut, Languages } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useI18n } from "@/lib/i18n";
+import { useI18n, type Lang } from "@/lib/i18n";
 import { useDovis } from "@/lib/dovis-provider";
 import { cn } from "@/lib/utils";
 
@@ -64,44 +63,119 @@ export function Header() {
           ) : null}
         </nav>
 
-        <div className="ml-auto flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 px-2 text-xs gap-1.5"
-            onClick={() => setLang(lang === "en" ? "zh-TW" : "en")}
-            aria-label={t.language}
-          >
-            <Languages className="size-3.5" />
-            {lang === "en" ? "繁中" : "EN"}
-          </Button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <LanguageChip
+            lang={lang}
+            label={t.language}
+            onToggle={() => setLang(lang === "en" ? "zh-TW" : "en")}
+          />
 
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            aria-label={t.theme}
-            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-          >
-            {mounted && resolvedTheme === "dark" ? (
-              <Sun className="size-4" />
-            ) : (
-              <Moon className="size-4" />
-            )}
-          </Button>
+          <ThemePill
+            label={t.theme}
+            isDark={mounted && resolvedTheme === "dark"}
+            onPick={setTheme}
+          />
 
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
+          <button
+            type="button"
             aria-label={t.signOut}
             onClick={() => void signOut()}
+            className="squircle grid size-8 place-items-center border border-border bg-card text-muted-foreground transition-colors hover:text-foreground hover:border-foreground/25"
           >
             <LogOut className="size-4" />
-          </Button>
+          </button>
         </div>
       </div>
     </header>
+  );
+}
+
+/**
+ * Shows the language you are IN, not the one you would switch to.
+ *
+ * Those two conventions look interchangeable and are not: a button reading 繁中
+ * while the page is in English is ambiguous — it could equally mean "you are in
+ * Chinese" — and the reader cannot tell without looking at the rest of the page.
+ * Showing current state is unambiguous; the icon and the hover carry the
+ * affordance instead.
+ */
+function LanguageChip({
+  lang,
+  label,
+  onToggle,
+}: {
+  lang: Lang;
+  label: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={label}
+      title={label}
+      className="squircle inline-flex h-8 items-center gap-1.5 border border-border bg-card px-2.5 text-xs font-medium text-foreground transition-colors hover:border-foreground/25 hover:bg-muted"
+    >
+      <Languages className="size-3.5 text-muted-foreground" />
+      {lang === "en" ? "EN" : "繁中"}
+    </button>
+  );
+}
+
+/**
+ * Two-state pill. Both destinations are visible at once and the thumb marks which
+ * one is active, so the control states the current theme rather than only hinting
+ * at the next one — the same reasoning as the language chip.
+ */
+function ThemePill({
+  isDark,
+  label,
+  onPick,
+}: {
+  isDark: boolean;
+  label: string;
+  onPick: (t: "light" | "dark") => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className="relative inline-flex h-8 items-center rounded-full border border-border bg-muted p-0.5"
+    >
+      {/*
+        The thumb is a sibling behind both buttons rather than a background on the
+        active one, so it can slide between them instead of blinking.
+      */}
+      <span
+        aria-hidden
+        className="absolute left-0.5 top-0.5 size-7 rounded-full bg-card shadow-sm transition-transform duration-200 ease-out motion-reduce:transition-none"
+        style={{ transform: isDark ? "translateX(1.75rem)" : "translateX(0)" }}
+      />
+      <button
+        type="button"
+        onClick={() => onPick("light")}
+        aria-pressed={!isDark}
+        aria-label="Light"
+        className={cn(
+          "relative z-10 grid size-7 place-items-center rounded-full transition-colors",
+          isDark ? "text-muted-foreground hover:text-foreground" : "text-foreground",
+        )}
+      >
+        <Sun className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={() => onPick("dark")}
+        aria-pressed={isDark}
+        aria-label="Dark"
+        className={cn(
+          "relative z-10 grid size-7 place-items-center rounded-full transition-colors",
+          isDark ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Moon className="size-3.5" />
+      </button>
+    </div>
   );
 }
 
