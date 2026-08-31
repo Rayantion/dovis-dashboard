@@ -68,6 +68,23 @@ cp .env.example .env.local
 Fill in all three values. `SUPABASE_SERVICE_ROLE_KEY` has no `NEXT_PUBLIC_`
 prefix and must never get one — it bypasses RLS entirely.
 
+**Then confirm you actually left demo mode**, because demo mode looks exactly like a
+working install — `/login` returns 200, sign-in works, a full queue renders, and none
+of it is real:
+
+```bash
+curl -fsS http://127.0.0.1:3000/api/health
+# {"ok":true,"demo":false,"supabase":true,"serviceRole":true,"google":false}
+```
+
+`"demo": false` is the check. If it says `true`, `.env.local` is missing or was never
+picked up — **rebuild**, don't just restart. The `NEXT_PUBLIC_` values are inlined at
+build time, so editing `.env.local` and restarting leaves the old values compiled in.
+
+`"serviceRole": false` alongside `"supabase": true` is the half-state worth knowing
+about: sign-in and the queue work, and every attempt to open a draft fails. The
+endpoint returns HTTP 500 in that case rather than claiming health.
+
 ### 2b. Connecting Google (optional, but much nicer than the CLI)
 
 Set the `GOOGLE_*` values in `.env.local` and a **Google account** card appears on the
