@@ -229,6 +229,15 @@ The asymmetry holds in one direction only: an assistant cannot reach the owner's
 conversations, the merged Telegram one included, while the owner can audit
 anything an assistant asked Dovis.
 
+**Assistants are also isolated from each other**, and that falls out of the same
+clause rather than needing a rule of its own: for an assistant `is_owner()` is
+false, so the only surviving rows are those where `author_id` is their own id.
+One assistant cannot read another's conversations. This is worth stating
+explicitly because it is the kind of guarantee usually implemented by filtering
+in the UI, where it is not a guarantee at all — here the rows never leave
+Postgres, so no query, no crafted request and no bug in the sidebar can expose
+them.
+
 Writes go through the server route under `service_role`, never from the browser —
 the same shape `todo_payloads` already uses. `messages` **is** added to the
 realtime publication (unlike `todo_payloads`), because the reply has to stream.
@@ -271,6 +280,31 @@ Behaviour agreed with Aaron:
 - The assistant's chat view carries a persistent line stating that the owner can
   read it.
 - **Mobile first.** Verify at 375 and 1440 before it is called done.
+
+### The owner's sidebar
+
+The owner's own conversations list flat. Assistants' conversations sit behind a
+collapsed **Assistants folder** in the left rail, which expands to reveal them,
+each tagged with who is talking.
+
+- **Fetch on expand, not on page load.** The folder is collapsed by default, so
+  an owner who never opens it never pays for the query. This matters more than
+  any client-side throttling.
+- **Five at a time**, with a *Show 5 more* control when more exist. Implemented
+  as a keyset page over `(pinned desc, updated_at desc, id)` using Supabase
+  `.range()` — not by fetching everything and slicing, which would defeat the
+  point.
+- **Debounce belongs on search, not on paging.** Aaron asked for debouncing
+  here; the accurate mapping is that *Show 5 more* is a paged fetch (each click
+  is one deliberate request, so there is nothing to debounce), while a search
+  box over conversation titles is where a debounce genuinely belongs — roughly
+  250ms, so typing "insurance" issues one query rather than nine. Both are
+  worth having; they are simply different mechanisms and it is worth not
+  confusing them in the implementation.
+
+If more than one assistant exists, consider sub-grouping the folder by assistant
+rather than interleaving them — five conversations drawn from three people reads
+as noise. Left as a refinement, not a requirement.
 
 The list is the piece paddy has no equivalent for — its `ChatHistorySheet` shows
 turns within a single capture's thread, not a set of conversations. Expect to
