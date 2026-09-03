@@ -45,6 +45,23 @@ queue: a reply that lands while the socket is down will not arrive on its own.
 The chat view therefore refetches its thread on mount and on reconnect, using the
 same pattern as `refresh()` in `dovis-provider.tsx`.
 
+**Confirmed against the box, 2026-09-03:**
+
+- **The webhook response is an acknowledgement, not the answer.** It says the run
+  was accepted. The reply arrives later, through Supabase. Any implementation
+  that awaits a chat response from that POST is wrong.
+- **Authentication is HMAC**, natively: `X-Webhook-Signature-V2` and
+  `X-Webhook-Timestamp`, with the timestamp inside roughly ±300 seconds, and a
+  per-route secret. Rate limiting and idempotency are supported. Hermes offers no
+  native mTLS or Cloudflare service-token auth; Cloudflare Access may sit in
+  front as an outer layer but never replaces HMAC validation.
+- **Hermes writes its reply directly to Supabase** using the service-role
+  credential already held in its protected environment on the VPS. This settles
+  the earlier open question: a callback into `/api/chat` also works but adds an
+  authenticated hop for nothing, since Hermes is not the browser session that
+  route authenticates.
+- **`/api/chat` inserts the user's turn itself**, server-side, before forwarding.
+
 ## Security — the part that must not be ported from paddy
 
 `paddy-detector` has a working chat (`src/lib/chat.ts`, `src/components/chat/`)
@@ -69,8 +86,8 @@ has API routes and already holds `service_role`, so it can. Hence:
 
 - **No Hermes URL or secret in `NEXT_PUBLIC_*`.** Server-side env only.
 - **`/api/chat` authenticates before forwarding**, exactly like `/api/act`.
-- **The caller's role travels with the request** and selects the tool set on the
-  box — see below.
+- **The server picks the Hermes route from the authenticated role** — see below.
+  A role in the request body is not an authority.
 
 ## Assistant chat — decided 2026-09-03
 
@@ -86,9 +103,31 @@ relied on "you are talking to an assistant, do not act" would be a promise a
 sufficiently persuasive message can undo, which is the thing this architecture
 rejects everywhere else.
 
-So `/api/chat` sends the authenticated role to Hermes, and Hermes selects a tool
-set from it. An assistant's turn runs with no write tools at all: no todo
-creation or mutation, no `draft_email`, no calendar writes.
+**How, confirmed against the box 2026-09-03.** Hermes does *not* accept an
+arbitrary toolset per request — an earlier draft of this document assumed it
+did. It exposes **fixed toolsets per webhook route**. So the enforcement is one
+route per role, each with its own secret, and `/api/chat` chooses between them
+from the authenticated Supabase profile:
+
+```yaml
+routes:
+  owner-chat:
+    secret: "server-side-owner-secret"
+    toolsets: [hermes-telegram]        # full core toolset, trusted path only
+  assistant-chat:
+    secret: "server-side-assistant-secret"
+    toolsets: [hermes-webhook, no_mcp] # web search/extract/vision/clarify only
+```
+
+This is stronger than a per-request toolset would have been: the assistant route
+cannot be talked into a capability it does not have, because the capability is
+bound to a URL and a secret the browser never sees. An assistant's turn gets no
+todo mutation, no `write_file`, no patch, no terminal or process tools, no memory
+or skill management, no `gmail_create_draft` and no calendar writes.
+
+**Never forward a client-supplied route name or role.** The route is derived
+server-side from the session; a body field like `{"role":"assistant"}` is not
+evidence of anything.
 
 Within that, an assistant's chat is a **real conversation, not a restricted
 query box** (Aaron: *"not only read only, they able to use it to ask some
@@ -150,9 +189,25 @@ only ever existed if rows were deliberately shared across accounts.
 
 **The cost lands on Hermes, not the dashboard.** For the Telegram conversation to
 appear on the web, Hermes must persist every Telegram turn into `messages` as it
-happens, rather than keeping it only in its own memory. This is new work on the
-box and the most likely source of friction, because it must happen on every
-exchange, not only when the web asks.
+happens, rather than keeping it only in its own memory.
+
+**Confirmed 2026-09-03: it does not do this today.** Hermes persists Telegram
+sessions in its own local session database and transcripts, and writes nothing to
+Supabase. So **the UI must not promise a Telegram conversation until that bridge
+exists.** Ship the conversation list with web conversations only; the Telegram
+row appears when Hermes can populate it, not before. Building the list so it
+renders whatever `conversations` contains — rather than hard-coding a Telegram
+entry — makes that a data change rather than a UI change.
+
+The bridge, when it is built, must: find or create exactly one owner conversation
+with `source = 'telegram'`; insert every inbound turn and every Dovis reply;
+generate a title from the first exchange; keep delivering Telegram messages even
+if the Supabase write fails, logging and retrying the missed persistence rather
+than dropping the conversation; and attach the correct owner id so a message can
+never land in another client's project.
+
+That last point deserves weight: one box per boss means a mis-scoped owner id is
+not a display bug, it is one principal's mail appearing in another's dashboard.
 
 ## Schema
 
@@ -350,9 +405,13 @@ tokens, not the markup; implementation comes from the shadcn registries.
 ## Out of scope, recorded so it is not re-litigated
 
 - **STT / TTS runs through Hermes**, configured on the box (Aaron, 2026-09-03).
-  Not a dashboard concern. One constraint to carry: the box is 4GB / 2 vCPU, so
-  whatever Hermes uses for speech must be a hosted service, not a local model —
-  the same budget that rejected a local embedding model.
+  Not a dashboard concern. Config shapes are now known rather than guessed:
+  `stt.provider` with `groq` (`whisper-large-v3-turbo`) or `openai`
+  (`whisper-1`, a separate paid credential), and `tts.provider: edge`. Hermes
+  recommends **Groq Whisper plus Edge TTS** — Edge needs no key.
+  **Live issue worth passing on:** the box currently has STT enabled with a
+  **local `base` model**, on 4GB / 2 vCPU. That is the arrangement the budget
+  cannot support, and it is running now rather than being a future risk.
 - **A ChatGPT subscription grants no API access.** This has now blocked two
   designs (the chat model, then STT). Treat it as standing: anything needing a
   programmatic OpenAI call is a second bill and a second secret.
@@ -367,12 +426,48 @@ tokens, not the markup; implementation comes from the shadcn registries.
    leaves open.
 2. ~~One thread or two?~~ **Answered 2026-09-03: one shared conversation set,
    Gemini-style.** See the conversation model above.
-3. **How does Hermes authenticate back to Supabase** to insert its reply —
-   service_role held on the box, or a callback into `/api/chat`?
-4. **Can Hermes persist every Telegram turn** into `messages` as it happens?
-   The merged model depends on it. If it cannot, the Telegram conversation
-   simply will not appear on the web and the design degrades to web-only
-   conversations — worth knowing before the UI promises otherwise.
+3. ~~How does Hermes authenticate back to Supabase?~~ **Answered: service-role
+   credential already held in its protected environment on the VPS, inserting
+   directly.** A callback adds a hop for nothing.
+4. ~~Can Hermes persist every Telegram turn?~~ **Answered: not today.** It keeps
+   Telegram in its own local session store. The merged list therefore ships
+   web-only until that bridge is built.
+5. ~~Which repository is the deployment target?~~ **Answered: this one is
+   upstream; Hermes replicates it into the private client repo.** See
+   "Deployment targets" for what that means for verification.
+
+## Deployment targets — two repos, and the trap in it
+
+Discovered 2026-09-03 from Hermes' integration answers, then verified directly:
+
+| Repo | Deployment | `/api/health` |
+|---|---|---|
+| `Rayantion/dovis-dashboard` (this one, public template) | `dovis-dashboard.vercel.app` | `demo:true, supabase:false` |
+| `Rayantion26/aaron-dovis-dashboard` (private) | `aaron-dovis-dashboard.vercel.app` | `demo:false, supabase:true, serviceRole:true` |
+
+**This repo is upstream.** Work lands here, and Hermes pulls it into the private
+client repo and adapts it there (Aaron, 2026-09-03). So committing to the
+template is correct, not a misfire — but it means a change is not *in service*
+when it is pushed here. It is in service when Hermes has replicated it and
+Vercel has redeployed the private project.
+
+Two consequences worth holding on to:
+
+1. **"Pushed" and "live for the boss" are different claims.** Verifying against
+   `dovis-dashboard.vercel.app` proves only that the template built. The
+   template runs in demo mode, where the realtime channel never connects — so a
+   fix to realtime recovery cannot even execute there. Anything operational must
+   be confirmed against the private deployment after Hermes has pulled.
+2. **Replication is a step someone has to trigger.** Until it happens the
+   upstream fix is doing nothing for the person who has the bug.
+
+A check that distinguishes the two, worth running after any replication:
+
+```bash
+curl -s https://aaron-dovis-dashboard.vercel.app/api/health
+# demo:false is the live client instance. demo:true means you are looking at
+# the template and have proved nothing about production.
+```
 
 ## Build order
 
