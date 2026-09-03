@@ -1,0 +1,238 @@
+# Web chat — design
+
+**Status: designed, not built.** Approved 2026-09-03. This supersedes the "Web
+assistant" section of `ADDING-FEATURES.md`, which recorded the decision to call
+the Hermes gateway but left the transport unresolved.
+
+---
+
+## What changed: the blocker is retired, not answered
+
+`ADDING-FEATURES.md` blocked this feature on one unverified fact — *does Hermes
+expose an HTTP chat endpoint with resumable session IDs?* Shared memory between
+web and Telegram depended on it.
+
+That question no longer needs an answer, because the design no longer asks Hermes
+to remember anything between calls. **The database holds the conversation and
+replays it.** Hermes receives the history it needs on every request and can be
+restarted, redeployed or rebooted mid-conversation without losing the thread.
+
+This is the same reasoning as the refresh work shipped alongside it: make the
+durable store the source of truth, and treat every process holding state in
+memory as an optimisation you are allowed to lose.
+
+## Data flow
+
+```
+Browser  ──POST──▶  /api/chat  ──POST──▶  Hermes webhook on the box
+                    (session +            (secret header, never
+                     role check)           reaches the browser)
+                                                   │
+                                                   ▼
+Browser  ◀──Realtime──  messages table  ◀──insert──┘
+```
+
+1. The user types. The browser POSTs to `/api/chat` — same origin, no secret.
+2. The route authenticates the Supabase session, checks the role, writes the
+   user's turn to `messages`, and forwards to Hermes with the last N turns.
+3. Hermes answers on the box, with its own vault and memory, and inserts the
+   reply into `messages` (service_role, via the same route or a callback).
+4. The browser receives the reply over the Realtime channel already subscribed
+   for the queue. No polling, no streaming, no long-lived connection.
+
+Because replies arrive by Realtime, they inherit the same delivery caveat as the
+queue: a reply that lands while the socket is down will not arrive on its own.
+The chat view therefore refetches its thread on mount and on reconnect, using the
+same pattern as `refresh()` in `dovis-provider.tsx`.
+
+## Security — the part that must not be ported from paddy
+
+`paddy-detector` has a working chat (`src/lib/chat.ts`, `src/components/chat/`)
+whose UI this design reuses. **Its transport must not be reused.** paddy calls a
+public n8n webhook directly from the browser, gated by a string its own comment
+correctly describes as *"NOT a secret... it filters junk traffic; it does not
+authenticate."*
+
+That trade is right for paddy, where the worst case is a bot asking about rice
+leaves. It is wrong here for two reasons:
+
+1. **The webhook drives an assistant with the principal's Gmail and calendar.**
+   A URL in the client bundle is a URL anyone can drive.
+2. **It would route around the permission model.** The assistant role is
+   read-only by design — no modify without the owner's switch, no delete ever,
+   enforced in the UI, the API routes and RLS. An assistant who can send free
+   text to Hermes can simply *ask* for what the UI forbids, and `can_modify`
+   stops meaning anything.
+
+paddy could not fix this: it is a client-side PWA with no server. This dashboard
+has API routes and already holds `service_role`, so it can. Hence:
+
+- **No Hermes URL or secret in `NEXT_PUBLIC_*`.** Server-side env only.
+- **`/api/chat` authenticates before forwarding**, exactly like `/api/act`.
+- **Role gating is a product decision that must be made before build** — see
+  Open questions.
+
+## Conversation model — decided 2026-09-03
+
+Aaron asked for "one thread", and for it to work "like Gemini web or app". Those
+are the same requirement once stated precisely, and it is **not** one endless
+transcript. Gemini keeps *many named conversations in a list, synced across every
+device* — opening it on a phone or the web shows the same list, and any of them
+can be continued. The system feels unified because the set of conversations is
+shared, not because there is only one.
+
+So:
+
+- Conversations are first-class rows with a title, a pinned flag and timestamps.
+- The web gets the full Gemini shape: list, auto-titled from the first message,
+  pin, resume, new chat.
+- **Telegram is one always-on conversation that appears in that list.** Opening
+  it on the web continues the conversation from the phone. Telegram itself gains
+  no commands — no `/new`, no `/switch`. Conversation management is a web
+  affordance; Telegram stays a single linear chat, which is all it can be.
+
+This retires the earlier "one thread or two" question, and with it the privacy
+objection that motivated separate threads: per-owner RLS means an assistant
+cannot see the owner's conversations at all, so merging leaks nothing. The leak
+only ever existed if rows were deliberately shared across accounts.
+
+**The cost lands on Hermes, not the dashboard.** For the Telegram conversation to
+appear on the web, Hermes must persist every Telegram turn into `messages` as it
+happens, rather than keeping it only in its own memory. This is new work on the
+box and the most likely source of friction, because it must happen on every
+exchange, not only when the web asks.
+
+## Schema
+
+```sql
+create table public.conversations (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references public.profiles(id) on delete cascade,
+  title      text,
+  source     text not null default 'web' check (source in ('web','telegram')),
+  pinned     boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index on public.conversations (owner_id, pinned desc, updated_at desc);
+
+create table public.messages (
+  id              uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  owner_id        uuid not null references public.profiles(id) on delete cascade,
+  role            text not null check (role in ('user','dovis')),
+  content         text not null,
+  created_at      timestamptz not null default now()
+);
+create index on public.messages (conversation_id, created_at);
+```
+
+Exactly one conversation per owner carries `source = 'telegram'`. Hermes writes
+into it and the web lists it alongside the rest. `title` is null until Hermes
+generates one from the first exchange, the way Gemini does.
+
+RLS from day one, not added later. A conversation belongs to one principal, and
+an assistant account must never read the owner's thread — the whole point of the
+queue is that the owner sees things the assistant does not.
+
+```sql
+alter table public.conversations enable row level security;
+alter table public.messages      enable row level security;
+
+create policy "own conversations" on public.conversations
+  for select to authenticated
+  using (owner_id = auth.uid());
+
+create policy "own messages" on public.messages
+  for select to authenticated
+  using (owner_id = auth.uid());
+```
+
+This is what makes the merged Telegram-plus-web model safe: an assistant does not
+see the owner's conversations at all, so there is nothing to leak by unifying
+them. `owner_id` is denormalised onto `messages` on purpose — the policy stays a
+column comparison instead of a join on every streamed row.
+
+Writes go through the server route under `service_role`, never from the browser —
+the same shape `todo_payloads` already uses. `messages` **is** added to the
+realtime publication (unlike `todo_payloads`), because the reply has to stream.
+That is safe precisely because the select policy is owner-scoped.
+
+## Context window
+
+Stateless replay costs tokens as a thread grows. Cap it:
+
+- Send the last **N turns** verbatim (start at 20, tune against real threads).
+- Keep a rolling summary row for everything that fell out of the window.
+
+Since Codex on the box authenticates with a ChatGPT subscription rather than
+metered API credit, this is latency, not billing. It still bounds the prompt.
+
+## UI
+
+Ported from `paddy-detector`, which already solved most of this and was verified
+on mobile and desktop:
+
+| paddy | Dovis |
+|---|---|
+| `AssistantIcon.tsx` | Port as-is. One sparkle identity shared by every entry point so the bubble, the tab and any inline trigger read as one feature. Honours `prefers-reduced-motion`. |
+| `ChatSheet.tsx` (725 lines) | **Split during the port** — it is near the 800-line ceiling before Dovis adds anything. |
+| `ChatHistorySheet.tsx` | Port; back it with `messages` instead of IndexedDB. |
+| `lib/chat.ts` | Rewrite. This is the transport, and the transport changes. |
+
+Behaviour agreed with Aaron:
+
+- A floating **bubble** on the dashboard, and a dedicated **Assistant page**.
+- The bubble **hides on the Assistant page** and returns elsewhere — it should
+  never offer a route to the page you are already on.
+- A **conversation list**, Gemini-style: auto-titled from the first exchange,
+  pinned items first, then most recently updated. The Telegram conversation
+  appears in this list like any other and is labelled as such.
+- **Pinning.**
+- **Mobile first.** Verify at 375 and 1440 before it is called done.
+
+The list is the piece paddy has no equivalent for — its `ChatHistorySheet` shows
+turns within a single capture's thread, not a set of conversations. Expect to
+write that one rather than port it.
+
+Per the workspace rule, visual direction for this new surface goes through the
+`stitch-to-shadcn` skill and Stitch MCP before components are written. Take the
+tokens, not the markup; implementation comes from the shadcn registries.
+
+## Out of scope, recorded so it is not re-litigated
+
+- **STT / TTS runs through Hermes**, configured on the box (Aaron, 2026-09-03).
+  Not a dashboard concern. One constraint to carry: the box is 4GB / 2 vCPU, so
+  whatever Hermes uses for speech must be a hosted service, not a local model —
+  the same budget that rejected a local embedding model.
+- **A ChatGPT subscription grants no API access.** This has now blocked two
+  designs (the chat model, then STT). Treat it as standing: anything needing a
+  programmatic OpenAI call is a second bill and a second secret.
+- **Default language is set by Hermes** (Aaron, 2026-09-03), not chosen in the
+  dashboard. The existing EN / zh-TW toggle stays a per-viewer override.
+
+## Open questions — answer before building
+
+1. **Can an assistant use the chat at all?** The three coherent answers are: no
+   chat for assistants; chat that is read-only about the queue and cannot ask
+   Dovis to act; or full chat, which means abandoning the read-only guarantee.
+   This is a product decision, not a technical one, and it gates `/api/chat`.
+2. ~~One thread or two?~~ **Answered 2026-09-03: one shared conversation set,
+   Gemini-style.** See the conversation model above.
+3. **How does Hermes authenticate back to Supabase** to insert its reply —
+   service_role held on the box, or a callback into `/api/chat`?
+4. **Can Hermes persist every Telegram turn** into `messages` as it happens?
+   The merged model depends on it. If it cannot, the Telegram conversation
+   simply will not appear on the web and the design degrades to web-only
+   conversations — worth knowing before the UI promises otherwise.
+
+## Build order
+
+1. Answer question 1. Nothing else is safe to build first.
+2. `conversations` + `messages` tables, RLS on both, `messages` added to the
+   realtime publication.
+3. `/api/chat` with session and role checks, and the Hermes secret server-side.
+4. Stitch pass for the surface, then port the paddy components onto `messages`.
+5. Verify: `npx tsc --noEmit`, `npm run build`, screenshots at 375 and 1440 in
+   both languages, and an assistant account confirming it cannot read the
+   owner's thread.
