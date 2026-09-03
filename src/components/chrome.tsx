@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import { Moon, Sun, Users, LayoutList, LogOut, Languages } from "lucide-react";
 import { useI18n, type Lang } from "@/lib/i18n";
 import { useDovis } from "@/lib/dovis-provider";
+import { StaleBanner } from "@/components/refresh-control";
 import { cn } from "@/lib/utils";
 
 export function Header() {
@@ -86,6 +87,13 @@ export function Header() {
           </button>
         </div>
       </div>
+
+      {/*
+        Inside the sticky header rather than floating over the page: it stays
+        visible while scrolling without ever covering the row someone is about to
+        act on, and it needs no magic offset to clear the demo strip above.
+      */}
+      <StaleBanner />
     </header>
   );
 }

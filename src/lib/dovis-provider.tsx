@@ -33,6 +33,17 @@ export interface Session {
   profile: Profile;
 }
 
+/**
+ * Health of the realtime socket, as far as the client can tell.
+ *
+ * `stale` is the one that matters. Postgres Changes gives no delivery guarantee:
+ * it does not queue events for a disconnected client and does not track how far
+ * each client has read, so anything that happened while the socket was down is
+ * gone and will never arrive. Only a refetch recovers it — which is why a manual
+ * refresh path exists at all rather than trusting the stream.
+ */
+export type Connection = "connecting" | "live" | "stale" | "offline";
+
 interface Ctx {
   ready: boolean;
   demo: boolean;
@@ -41,6 +52,11 @@ interface Ctx {
   todos: Todo[];
   widgets: DashboardWidget[];
   profiles: Profile[];
+  connection: Connection;
+  /** Queue changes received but deliberately not applied. Drives the banner. */
+  pendingCount: number;
+  refreshing: boolean;
+  refresh: () => Promise<void>;
   signIn: (identifier: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;
   changePassword: (newPassword: string) => Promise<string | null>;
@@ -82,6 +98,32 @@ function makeTempPassword() {
   return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
 }
 
+type Client = NonNullable<ReturnType<typeof createClient>>;
+
+/**
+ * The one read path. Bootstrap, reconnect and the refresh button all go through
+ * here so there is a single definition of "what the dashboard should be showing"
+ * — the stream is an optimisation on top of this, never a substitute for it.
+ *
+ * `profiles` comes back null for an assistant: RLS would return their own row
+ * only, and overwriting the list with that would be worse than leaving it alone.
+ */
+async function fetchAll(supabase: Client, profile: Profile) {
+  const [t, w] = await Promise.all([
+    supabase.from("todos").select("*").order("created_at", { ascending: false }),
+    supabase.from("dashboard_widgets").select("*").order("position"),
+  ]);
+  const profiles =
+    profile.role === "owner"
+      ? ((await supabase.from("profiles").select("*").order("created_at")).data ?? [])
+      : null;
+  return {
+    todos: (t.data ?? []) as Todo[],
+    widgets: (w.data ?? []) as DashboardWidget[],
+    profiles: profiles as Profile[] | null,
+  };
+}
+
 async function post(url: string, body: unknown) {
   const res = await fetch(url, {
     method: "POST",
@@ -101,8 +143,23 @@ export function DovisProvider({ children }: { children: React.ReactNode }) {
   // Demo-only: mutations to draft bodies live here so Modify/Reject actually work.
   const [payloads, setPayloads] =
     React.useState<Record<string, TodoPayload>>(demoPayloads);
+  const [connection, setConnection] = React.useState<Connection>(
+    isDemoMode ? "live" : "connecting",
+  );
+  const [pendingCount, setPendingCount] = React.useState(0);
+  const [refreshing, setRefreshing] = React.useState(false);
 
   const supabase = React.useMemo(() => createClient(), []);
+
+  /*
+    Realtime handlers need to know whether a row is already on screen without
+    re-subscribing every time the list changes, and without doing that lookup
+    inside a state updater (StrictMode runs those twice).
+  */
+  const todosRef = React.useRef<Todo[]>([]);
+  React.useEffect(() => {
+    todosRef.current = todos;
+  }, [todos]);
 
   // ---------------------------------------------------------------- bootstrap
   React.useEffect(() => {
@@ -149,23 +206,12 @@ export function DovisProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       setSession({ profile: profile as Profile });
-      await refreshAll(profile as Profile);
-      setReady(true);
-    }
-
-    async function refreshAll(profile: Profile) {
-      if (!supabase) return;
-      const [t, w] = await Promise.all([
-        supabase.from("todos").select("*").order("created_at", { ascending: false }),
-        supabase.from("dashboard_widgets").select("*").order("position"),
-      ]);
+      const initial = await fetchAll(supabase, profile as Profile);
       if (cancelled) return;
-      setTodos((t.data ?? []) as Todo[]);
-      setWidgets((w.data ?? []) as DashboardWidget[]);
-      if (profile.role === "owner") {
-        const { data } = await supabase.from("profiles").select("*").order("created_at");
-        if (!cancelled) setProfiles((data ?? []) as Profile[]);
-      }
+      setTodos(initial.todos);
+      setWidgets(initial.widgets);
+      if (initial.profiles) setProfiles(initial.profiles);
+      setReady(true);
     }
 
     boot();
@@ -174,9 +220,44 @@ export function DovisProvider({ children }: { children: React.ReactNode }) {
     };
   }, [supabase]);
 
+  // ------------------------------------------------------------------ refresh
+  const refresh = React.useCallback(async () => {
+    // Demo data cannot change underneath anyone, so there is nothing to fetch.
+    // The control stays mounted and simply clears — a disabled button on the
+    // showcase would read as broken rather than as "nothing to do".
+    if (isDemoMode || !supabase || !session) {
+      setPendingCount(0);
+      return;
+    }
+    setRefreshing(true);
+    try {
+      const next = await fetchAll(supabase, session.profile);
+      setTodos(next.todos);
+      setWidgets(next.widgets);
+      if (next.profiles) setProfiles(next.profiles);
+      setPendingCount(0);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [supabase, session]);
+
+  // Held in a ref so the realtime effect can call the current refresh without
+  // taking it as a dependency — otherwise every session change tears down and
+  // re-establishes the channel.
+  const refreshRef = React.useRef(refresh);
+  React.useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
   // ----------------------------------------------------------------- realtime
   React.useEffect(() => {
     if (isDemoMode || !supabase || !session) return;
+
+    /*
+      Local, not a ref: it resets naturally when the channel is rebuilt, which is
+      exactly the lifetime we want to reason about.
+    */
+    let connectedOnce = false;
 
     const channel = supabase
       .channel("dovis-queue")
@@ -184,21 +265,33 @@ export function DovisProvider({ children }: { children: React.ReactNode }) {
         "postgres_changes",
         { event: "*", schema: "public", table: "todos" },
         (payload) => {
-          setTodos((prev) => {
-            if (payload.eventType === "INSERT")
-              return [payload.new as Todo, ...prev];
-            if (payload.eventType === "DELETE")
-              return prev.filter((t) => t.id !== (payload.old as Todo).id);
-            return prev.map((t) =>
-              t.id === (payload.new as Todo).id ? (payload.new as Todo) : t,
-            );
-          });
+          /*
+            Updates to a row already on screen apply immediately. They are status
+            transitions (proposed → confirmed → executing → done) and the list is
+            ordered by created_at, so nothing moves — the row you are looking at
+            just tells you the truth about itself.
+
+            Inserts and deletes reshape the list, so they wait behind the banner.
+            A new proposal prepends; if one lands while the owner is reaching for
+            Confirm, every row shifts down one and they approve the wrong item —
+            which drafts mail in their own name. Freshness is not worth that.
+          */
+          if (payload.eventType === "UPDATE") {
+            const row = payload.new as Todo;
+            if (todosRef.current.some((t) => t.id === row.id)) {
+              setTodos((prev) => prev.map((t) => (t.id === row.id ? row : t)));
+              return;
+            }
+          }
+          setPendingCount((n) => n + 1);
         },
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "dashboard_widgets" },
         async () => {
+          // Widgets are ambient readouts, not controls that act on the owner's
+          // behalf, so there is no misclick to protect against. They stay live.
           const { data } = await supabase
             .from("dashboard_widgets")
             .select("*")
@@ -206,7 +299,22 @@ export function DovisProvider({ children }: { children: React.ReactNode }) {
           setWidgets((data ?? []) as DashboardWidget[]);
         },
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setConnection("live");
+          // Everything that happened while the socket was down is unrecoverable
+          // from the stream itself, and the gap length is unknowable from here.
+          // A refetch is the only way back to truth — and it is one query.
+          if (connectedOnce) void refreshRef.current();
+          connectedOnce = true;
+          return;
+        }
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          setConnection("stale");
+          return;
+        }
+        if (status === "CLOSED") setConnection("offline");
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -477,6 +585,10 @@ export function DovisProvider({ children }: { children: React.ReactNode }) {
     todos,
     widgets,
     profiles,
+    connection,
+    pendingCount,
+    refreshing,
+    refresh,
     signIn,
     signOut,
     changePassword,

@@ -5,6 +5,7 @@ import { Gate } from "@/components/gate";
 import { QueueList } from "@/components/queue";
 import { MetricBand, WidgetCard } from "@/components/widgets";
 import { DangerZone } from "@/components/danger-zone";
+import { RefreshButton } from "@/components/refresh-control";
 import { useDovis } from "@/lib/dovis-provider";
 import { useI18n } from "@/lib/i18n";
 
@@ -60,9 +61,18 @@ function Briefing() {
       </div>
 
       <section className="mx-auto max-w-5xl px-5 py-8">
-        <h2 className="font-heading text-sm uppercase tracking-wider text-muted-foreground mb-3">
-          {t.queue}
-        </h2>
+        {/*
+          The refresh sits on the queue rather than in the header. The header was
+          already at 406px on a 375px screen before the nav labels were dropped to
+          make it fit, and another control would put it back over. Here it is
+          beside the data it refetches, and always on screen.
+        */}
+        <div className="mb-3 flex items-center gap-3">
+          <h2 className="font-heading text-sm uppercase tracking-wider text-muted-foreground">
+            {t.queue}
+          </h2>
+          <RefreshButton className="ml-auto" />
+        </div>
         <div className="paper rounded-lg overflow-hidden">
           <QueueList todos={todos} />
         </div>
