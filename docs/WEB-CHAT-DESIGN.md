@@ -69,8 +69,39 @@ has API routes and already holds `service_role`, so it can. Hence:
 
 - **No Hermes URL or secret in `NEXT_PUBLIC_*`.** Server-side env only.
 - **`/api/chat` authenticates before forwarding**, exactly like `/api/act`.
-- **Role gating is a product decision that must be made before build** — see
-  Open questions.
+- **The caller's role travels with the request** and selects the tool set on the
+  box — see below.
+
+## Assistant chat — decided 2026-09-03
+
+Aaron: *"Yes assistant can use the chat, but externally, so yeah they can't
+modify anything."* Assistants get the chat. The constraint is that nothing they
+say can cause Dovis to act.
+
+**That has to be structural, not a prompt.** Dovis's existing guarantee about
+sending mail is credible precisely because `gmail_reply` is absent from the tool
+allowlist and `GMAIL_ALLOW_SENDING` is unset — the model cannot send because the
+capability is not there, not because it was asked nicely. An assistant chat that
+relied on "you are talking to an assistant, do not act" would be a promise a
+sufficiently persuasive message can undo, which is the thing this architecture
+rejects everywhere else.
+
+So `/api/chat` sends the authenticated role to Hermes, and Hermes selects a tool
+set from it. An assistant's turn runs with no write tools at all: no todo
+creation or mutation, no `draft_email`, no calendar writes.
+
+**Open: reading is not modification.** "Cannot modify" does not stop an assistant
+from *asking Dovis what is in the owner's inbox* — that is a read, and a
+read-only tool set permits it. The queue already exposes some mail-derived
+content to assistants (titles are drawn from the principal's mail), but an
+answerable question about the mailbox is a categorically wider door.
+
+Recommendation, pending Aaron: an assistant's chat gets **no mailbox or calendar
+read tools either**. It can discuss the queue they can already see and help with
+their own work, and it cannot query the principal's mail. That keeps both halves
+of the arrangement intact — they cannot act, and they cannot read what the owner
+has not already surfaced to them. Deciding otherwise is legitimate, but it should
+be a decision, not a side effect of scoping the guarantee to writes.
 
 ## Conversation model — decided 2026-09-03
 
@@ -213,10 +244,10 @@ tokens, not the markup; implementation comes from the shadcn registries.
 
 ## Open questions — answer before building
 
-1. **Can an assistant use the chat at all?** The three coherent answers are: no
-   chat for assistants; chat that is read-only about the queue and cannot ask
-   Dovis to act; or full chat, which means abandoning the read-only guarantee.
-   This is a product decision, not a technical one, and it gates `/api/chat`.
+1. ~~Can an assistant use the chat at all?~~ **Answered 2026-09-03: yes, but
+   externally — they cannot modify anything.** See "Assistant chat" below for
+   what that has to mean in enforcement terms, and for the reading question it
+   leaves open.
 2. ~~One thread or two?~~ **Answered 2026-09-03: one shared conversation set,
    Gemini-style.** See the conversation model above.
 3. **How does Hermes authenticate back to Supabase** to insert its reply —
@@ -228,7 +259,9 @@ tokens, not the markup; implementation comes from the shadcn registries.
 
 ## Build order
 
-1. Answer question 1. Nothing else is safe to build first.
+1. Confirm whether an assistant's chat may read the principal's mailbox (see
+   "Assistant chat"). The write answer is settled; this one is not, and it
+   decides which tool set Hermes builds.
 2. `conversations` + `messages` tables, RLS on both, `messages` added to the
    realtime publication.
 3. `/api/chat` with session and role checks, and the Hermes secret server-side.
