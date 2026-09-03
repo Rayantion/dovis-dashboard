@@ -294,17 +294,50 @@ each tagged with who is talking.
   as a keyset page over `(pinned desc, updated_at desc, id)` using Supabase
   `.range()` — not by fetching everything and slicing, which would defeat the
   point.
-- **Debounce belongs on search, not on paging.** Aaron asked for debouncing
-  here; the accurate mapping is that *Show 5 more* is a paged fetch (each click
-  is one deliberate request, so there is nothing to debounce), while a search
-  box over conversation titles is where a debounce genuinely belongs — roughly
-  250ms, so typing "insurance" issues one query rather than nine. Both are
-  worth having; they are simply different mechanisms and it is worth not
-  confusing them in the implementation.
+- **Debounce belongs on search, not on paging.** *Show 5 more* is a paged fetch
+  — each click is one deliberate request, so there is nothing to debounce.
+  Search is where the debounce belongs. See below.
 
 If more than one assistant exists, consider sub-grouping the folder by assistant
 rather than interleaving them — five conversations drawn from three people reads
 as noise. Left as a refinement, not a requirement.
+
+### Search
+
+Clarified by Aaron 2026-09-03: the debounce is for **chat search** — finding
+things he said in earlier conversations. So search runs over **message content**,
+not only conversation titles; "what did I say about the insurance renewal" is the
+actual question being asked.
+
+Debounce the input at roughly 250ms, so typing `insurance` issues one query
+rather than nine.
+
+**RLS scopes the results for free.** The same select policy applies, so an
+owner's search reaches their own conversations and their assistants'; an
+assistant's reaches only their own. No separate filtering, and no way for a
+mistake in the search UI to widen it.
+
+**Native Postgres full-text search is the wrong tool here.** Supabase's own
+documentation states that native Postgres FTS "is limited to alphabet and
+digit-based languages" — `to_tsvector` does not segment Chinese, which has no
+spaces, so a 繁中 message collapses to roughly one token and the search silently
+fails to match anything sensible. This interface is bilingual EN / zh-TW, so that
+is not an edge case.
+
+Two workable options:
+
+1. **`pg_trgm` with `ilike`** — a trigram GIN index on `content`. Handles
+   substring matching in both scripts, is a standard extension, and is simple.
+   **Start here.** The corpus is one principal and a few assistants; this is
+   comfortably enough.
+2. **PGroonga** — Supabase documents it as the multilingual full-text option and
+   names Chinese and Japanese explicitly. The upgrade path if Chinese search
+   quality ever becomes a real complaint, not something to reach for first.
+
+```sql
+create extension if not exists pg_trgm;
+create index on public.messages using gin (content gin_trgm_ops);
+```
 
 The list is the piece paddy has no equivalent for — its `ChatHistorySheet` shows
 turns within a single capture's thread, not a set of conversations. Expect to
