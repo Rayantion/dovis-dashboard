@@ -90,18 +90,39 @@ So `/api/chat` sends the authenticated role to Hermes, and Hermes selects a tool
 set from it. An assistant's turn runs with no write tools at all: no todo
 creation or mutation, no `draft_email`, no calendar writes.
 
-**Open: reading is not modification.** "Cannot modify" does not stop an assistant
-from *asking Dovis what is in the owner's inbox* — that is a read, and a
-read-only tool set permits it. The queue already exposes some mail-derived
-content to assistants (titles are drawn from the principal's mail), but an
-answerable question about the mailbox is a categorically wider door.
+Within that, an assistant's chat is a **real conversation, not a restricted
+query box** (Aaron: *"not only read only, they able to use it to ask some
+things"*). They can ask Dovis for help the way the owner does. What they cannot
+do is cause anything to happen.
 
-Recommendation, pending Aaron: an assistant's chat gets **no mailbox or calendar
-read tools either**. It can discuss the queue they can already see and help with
-their own work, and it cannot query the principal's mail. That keeps both halves
-of the arrangement intact — they cannot act, and they cannot read what the owner
-has not already surfaced to them. Deciding otherwise is legitimate, but it should
-be a decision, not a side effect of scoping the guarantee to writes.
+**Separation and visibility, as specified:**
+
+- An assistant's conversations are **their own**, in the same list UI.
+- An assistant **cannot see the owner's conversations**, including the merged
+  Telegram one. Enforced by the RLS above, not by hiding it in the UI.
+- The **owner can see an assistant's conversations**, and they carry an
+  **assistant tag** in the list naming who is talking.
+
+**The assistant must be told they are visible.** The owner-can-read rule is a
+reasonable arrangement between a principal and someone acting for them, and it
+stops being reasonable the moment it is a surprise — an assistant who believes a
+chat is private will eventually put something personal in it. A single persistent
+line in the assistant's chat view ("Your conversations are visible to the
+owner.") costs nothing and makes the arrangement honest rather than a trap.
+
+**Still open: reading is not modification.** "Cannot modify" does not stop an
+assistant from *asking Dovis what is in the owner's inbox* — that is a read, and
+a no-writes tool set permits it. The queue already exposes some mail-derived
+titles to assistants, but an answerable question about the mailbox is a
+categorically wider door.
+
+Recommendation is still to withhold mailbox and calendar **read** tools from an
+assistant's turn. But note that owner-visible transcripts genuinely weaken the
+argument against allowing them: an assistant fishing through the principal's mail
+would be doing it in full view of the person whose mail it is, which is a real
+deterrent and a real audit trail. Allowing reads is therefore a defensible
+choice here in a way it would not be with private assistant chats. It remains a
+decision to make rather than one to inherit.
 
 ## Conversation model — decided 2026-09-03
 
@@ -138,25 +159,30 @@ exchange, not only when the web asks.
 ```sql
 create table public.conversations (
   id         uuid primary key default gen_random_uuid(),
-  owner_id   uuid not null references public.profiles(id) on delete cascade,
+  author_id  uuid not null references public.profiles(id) on delete cascade,
   title      text,
   source     text not null default 'web' check (source in ('web','telegram')),
   pinned     boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index on public.conversations (owner_id, pinned desc, updated_at desc);
+create index on public.conversations (author_id, pinned desc, updated_at desc);
 
 create table public.messages (
   id              uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references public.conversations(id) on delete cascade,
-  owner_id        uuid not null references public.profiles(id) on delete cascade,
+  author_id       uuid not null references public.profiles(id) on delete cascade,
   role            text not null check (role in ('user','dovis')),
   content         text not null,
   created_at      timestamptz not null default now()
 );
 create index on public.messages (conversation_id, created_at);
 ```
+
+`author_id` is *who is talking*, not who the box belongs to. The earlier draft
+called it `owner_id`, which was wrong once assistants got their own chats — there
+is exactly one owner per deployment, so that column carried no information and
+could not express the visibility rule below.
 
 Exactly one conversation per owner carries `source = 'telegram'`. Hermes writes
 into it and the web lists it alongside the rest. `title` is null until Hermes
@@ -167,22 +193,41 @@ an assistant account must never read the owner's thread — the whole point of t
 queue is that the owner sees things the assistant does not.
 
 ```sql
+Visibility is **asymmetric**, per Aaron 2026-09-03: an assistant sees only their
+own conversations; the owner sees everyone's, theirs and every assistant's.
+
+```sql
+-- SECURITY DEFINER so the policy does not recurse into profiles' own RLS, and
+-- STABLE so Postgres evaluates it once per statement rather than once per row.
+create function public.is_owner() returns boolean
+  language sql security definer stable
+  set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'owner'
+  );
+$$;
+
 alter table public.conversations enable row level security;
 alter table public.messages      enable row level security;
 
-create policy "own conversations" on public.conversations
+create policy "read own, owner reads all" on public.conversations
   for select to authenticated
-  using (owner_id = auth.uid());
+  using (author_id = auth.uid() or public.is_owner());
 
-create policy "own messages" on public.messages
+create policy "read own, owner reads all" on public.messages
   for select to authenticated
-  using (owner_id = auth.uid());
+  using (author_id = auth.uid() or public.is_owner());
 ```
 
-This is what makes the merged Telegram-plus-web model safe: an assistant does not
-see the owner's conversations at all, so there is nothing to leak by unifying
-them. `owner_id` is denormalised onto `messages` on purpose — the policy stays a
-column comparison instead of a join on every streamed row.
+`author_id` is denormalised onto `messages` on purpose — the policy stays a
+column comparison plus one cached function call, rather than a join back to
+`conversations` on every streamed row.
+
+The asymmetry holds in one direction only: an assistant cannot reach the owner's
+conversations, the merged Telegram one included, while the owner can audit
+anything an assistant asked Dovis.
 
 Writes go through the server route under `service_role`, never from the browser —
 the same shape `todo_payloads` already uses. `messages` **is** added to the
@@ -220,6 +265,11 @@ Behaviour agreed with Aaron:
   pinned items first, then most recently updated. The Telegram conversation
   appears in this list like any other and is labelled as such.
 - **Pinning.**
+- In the **owner's** list, conversations belonging to an assistant carry an
+  **assistant tag** naming who is talking. An assistant's own list contains only
+  their conversations and needs no tag.
+- The assistant's chat view carries a persistent line stating that the owner can
+  read it.
 - **Mobile first.** Verify at 375 and 1440 before it is called done.
 
 The list is the piece paddy has no equivalent for — its `ChatHistorySheet` shows
