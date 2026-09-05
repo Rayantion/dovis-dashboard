@@ -492,10 +492,13 @@ install — not in the template every other client also reads.
 ## Catch me up
 
 **Status: designed, not built. Blocked on the chat above.** Aaron asked for this
-2026-09-03 and settled every one of its twelve original open questions across two
-rounds on 2026-09-05. Those answers are folded into the body below rather than
+2026-09-03 and settled every one of its twelve original open questions across
+three rounds on 2026-09-05, the last of those rounds closing the two the earlier
+rounds had left open. Those answers are folded into the body below rather than
 left in a list at the foot; what remains at the foot is genuinely still open, and
-it is two items rather than twelve.
+it is two items rather than twelve — one of them a decision the final round
+created rather than closed, because carrying it out honestly needs a column this
+database does not have.
 
 A quick action inside the chat, also fired by typing *"Catch me up"* or *"What
 did I miss?"* — and by their Chinese equivalents, which is a requirement and not
@@ -640,6 +643,9 @@ alter table public.profiles
 alter table public.profiles
   add column if not exists timezone text;
 
+alter table public.profiles
+  add column if not exists blind_since jsonb;
+
 comment on column public.profiles.last_seen_at is
   'THE FLOOR. Where the next recap''s window starts. Holds the created_at of the '
   'user turn that OPENED the last confirmed recap — deliberately before the model '
@@ -667,6 +673,22 @@ comment on column public.profiles.timezone is
   'by an assistant, never from anything an email said, and never overwritten once '
   'set. NULL means nobody has set one and no run has reported one. The VPS '
   'timezone is never used and never inferred.';
+
+comment on column public.profiles.blind_since is
+  'WHEN A SOURCE WENT DARK, so a warning can say since when. One key per '
+  'delegated source, holding the created_at of the user turn of the FIRST run in '
+  'the current unbroken sequence of blind ones, e.g. {"mail":"2026-09-02T09:20+08"}. '
+  'A key is written only if absent, so re-confirming one reply twice — or across '
+  'sessions — records nothing new. A key is REMOVED by ANY run that reports THAT '
+  'source ok, including a run whose verdict is still partial because a DIFFERENT '
+  'source is dark: removal is per key and never waits for a fully covered run, so '
+  'the map only ever names sources that are dark right now. NOT A MARK AND NOT A '
+  'FLOOR: no window is ever computed from '
+  'it, nothing is ever compared against it, and the statement that writes it on a '
+  'blind run must never also touch last_seen_at or last_scan_at. It records when '
+  'Dovis FIRST FOUND the source unreadable, which may be hours after the '
+  'credential actually died, so every string built on it says "has not been able '
+  'to read since" and none of them claims to know when access was lost.';
 ```
 
 `add column if not exists` because `schema.sql` is re-runnable by design — it
@@ -684,6 +706,21 @@ the model was thinking sits below the next run's floor and is never reported by
 any recap — the fatal one, traced in full below. Two columns, written in one
 statement, from two different rows: the floor from the turn, the proof from the
 reply.
+
+**`blind_since` is a third value of a different kind, and holding it apart from
+the two marks is what makes it safe.** The marks say how far a recap has been
+shown to have covered. `blind_since` says how long a source has been unreadable,
+which is the input to the escalation Aaron decided on 2026-09-05 and which is
+argued out under partial visibility below. It is written on exactly the runs where
+the marks deliberately do **not** move, so the two live on different branches
+rather than in one statement — and that separation carries weight, because the
+tempting shape is a single write that tidies the recap by nudging the floor along
+with the warning, which rebuilds by hand the hole this section exists to prevent.
+A jsonb map rather than a column per source, because the sources fail
+independently and every sentence built on it names its source; and unlike the
+per-source *floors* rejected below, nothing is ever compared against this map, so
+it cannot produce a window, a header, or a hole. Its only consumers are two
+warnings and one count derived at read time.
 
 Both are nullable with no default. A default of `now()` would make the very first
 "Catch me up" cover zero elapsed time, which is the one run where the window
@@ -856,13 +893,17 @@ Deriving the pair from the reply also gives the confirmation a durable home.
 Nothing depends on the tab that started the run still being open: any load of the
 thread can reconstruct the pair, which is what makes the reconciliation below
 possible at all. Then the two `meta` blobs are checked against each other, and
-only a verdict of `advance` reaches the database:
+only a verdict of `advance` reaches the marks:
 
 ```sql
+-- The ADVANCE branch, and only this branch touches a mark.
 update public.profiles
    set last_seen_at = greatest(last_seen_at, <turn.created_at>),
        last_scan_at = greatest(last_scan_at, <reply.created_at>),
-       timezone     = coalesce(timezone, <validated zone from reply.meta>)
+       timezone     = coalesce(timezone, <validated zone from reply.meta>),
+       blind_since  = nullif(coalesce(blind_since, '{}'::jsonb)
+                             - <the verdict's covered sources, as text[]>,
+                             '{}'::jsonb)
  where id = <the caller's profile id>;
 ```
 
@@ -872,9 +913,61 @@ can never overwrite a zone the owner set, which is the direction Aaron's timezon
 decision requires and the *opposite* of the direction an earlier draft wrote it
 in; that flip is argued in the timezone section below. It is included only when
 the caller is the owner, because only the owner's account has a calendar for a
-run to have read. The route returns the verdict it computed, the id of the reply
-it evaluated, and all three column values, and the browser patches its session
-from that response, which is authoritative because the route has just written it.
+run to have read. The fourth clears the darkness record for every source this run
+actually read, which on this branch is every source it delegated — full coverage
+is exactly what "no source is dark" means, so this branch always empties the map
+outright. It is not, however, the only place that clears: the partial branch
+below subtracts the same `covered` list, because a run can read one source and
+fail another, and the key for the source that *did* read must not survive the run
+that read it. The route returns the verdict it computed, the id of the reply it
+evaluated, and all four column values, and the browser patches its session from
+that response, which is authoritative because the route has just written it.
+
+**A verdict of `partial` writes too, and what it writes is the whole of the
+argument.** It records darkness and it moves nothing:
+
+```sql
+-- The PARTIAL branch. What is ABSENT from this statement is the point:
+-- last_seen_at and last_scan_at are not here, and must never be added. Existing
+-- keys win over new ones because the incoming object is on the LEFT of `||`, so
+-- this records the FIRST run that found the source dark rather than the latest,
+-- and re-running it for the same reply changes nothing. The subtraction sits
+-- INSIDE the right operand, so a source this run DID read loses its key even
+-- though the run as a whole stayed blind on another one — and the incoming
+-- object still wins for the sources that are still dark.
+update public.profiles
+   set blind_since = nullif(
+         <one key per blind source, valued turn.created_at>::jsonb
+         || (coalesce(blind_since, '{}'::jsonb)
+             - <the verdict's covered sources, as text[]>),
+         '{}'::jsonb)
+ where id = <the caller's profile id>;
+```
+
+**The subtraction is what stops a recovered source fossilising in the map.** Mail
+goes dark on Monday while the calendar reads fine, so `blind_since` is
+`{"mail":"Monday"}`. On Tuesday mail comes back and the calendar fails. The
+verdict is `partial`, so nothing advances and nothing should — but `covered`
+holds `mail`, the subtraction drops Monday's mail key, and the map is left saying
+only what is true: the calendar has been dark since Tuesday. Without it, mail's
+Monday key survives until a fully covered run, which is precisely the run the
+still-dark calendar prevents. Both warnings would go on naming mail — "has not
+been able to read your mail and your calendar since Monday", false about mail,
+which was read on Tuesday — and at 72 hours the card would escalate a working
+source to the destructive treatment. A warning that names a source the boss can
+see working is the fastest way to teach him to ignore the one that isn't.
+
+Say the invariant out loud rather than leaving it to the reader of two SQL
+blocks: **a run that went blind records that it went blind and advances
+nothing.** Not the floor, not the proof, not "just a little, to keep the recap
+tidy". The warning exists because the period was not covered; a warning that
+moved the mark would be announcing a hole while digging it.
+
+A verdict of `errored` or `malformed` writes **neither** statement. A reply the
+dashboard could not read is not evidence that a source is unreadable — it is
+evidence that the run failed, which is a different claim — so it leaves
+`blind_since` exactly where it was, and a genuinely dark source is recorded by
+the next run that comes back readable enough to say so.
 
 **Note what the floor takes.** It is the *turn's* timestamp, not the reply's,
 even though the reply is the row being confirmed and is sitting right there in
@@ -944,14 +1037,22 @@ them; the echo is what the confirmation route reads back.
 #### The result envelope is this side's contract — revised 2026-09-05
 
 **An earlier draft of this section rested on Aaron's decision that the reply
-carries an explicit `success | empty | error`, and quietly treated that as
-something the transport provides. Hermes' answer of 2026-09-05 is that it does
-not.** The webhook response must not be assumed to be a machine-readable
-success/empty/error envelope at all. **The recap server defines and validates its
-own structured result, including partial visibility such as "Gmail unavailable
-but Calendar available."**
+carries an explicit result, and quietly treated that as something the transport
+provides. Hermes' answer of 2026-09-05 is that it does not.** The webhook response
+must not be assumed to be a machine-readable envelope at all. **The recap server
+defines and validates its own structured result — `success | empty | partial |
+error` — including partial visibility such as "Gmail unavailable but Calendar
+available."**
 
-So the three-value result is not a fact about Hermes. It is a shape this side
+**The enum is four values, and `partial` is one of the four because Aaron named
+it.** It is not a state inferred from a `success` whose coverage came back short,
+and writing it as a three-value enum plus a derived case would lose the thing he
+asked for: a reply is allowed to say outright that it went partly blind. The
+dashboard does not depend on it saying so — coverage still decides, and a
+`success` with a short coverage map is a `partial` verdict regardless — but a box
+that volunteers the bad news must have a literal to volunteer it in.
+
+So the four-value result is not a fact about Hermes. It is a shape this side
 writes down, demands, checks, and refuses to act on when it does not arrive. That
 distinction changes very little about what gets built and everything about where
 the guarantee lives, so it is worth being exact about both halves.
@@ -968,11 +1069,12 @@ alter table public.messages
 comment on column public.messages.meta is
   'Structured sidecar; NULL on ordinary turns. A recap REQUEST turn carries what '
   'this server asked for — {"kind":"dovis.recap.request.v1","delegated":["mail",'
-  '"calendar"],"ahead_days":7,"timezone":"Asia/Taipei","since":"..."} — written '
-  'by /api/recap before Hermes is called. A recap REPLY carries what came back: '
-  '{"kind":"dovis.recap.v1","turn_id":"<the user turn this run answers, on the '
-  'echo branch>","result":"success"|"empty"|"error","coverage":{"mail":"ok",'
-  '"calendar":"unavailable"},"timezone":"Asia/Taipei"}. content stays the prose. '
+  '"calendar"],"ahead_days":7,"timezone":"Asia/Taipei","lang":"zh-TW",'
+  '"since":"..."} — written by /api/recap before Hermes is called. A recap REPLY '
+  'carries what came back: {"kind":"dovis.recap.v1","turn_id":"<the user turn '
+  'this run answers, on the echo branch>","result":"success"|"empty"|"partial"|'
+  '"error","coverage":{"mail":"ok","calendar":"unavailable"},'
+  '"timezone":"Asia/Taipei"}. content stays the prose. '
   'Both halves stream over Realtime with their rows, so neither may hold anything '
   'the select policy does not already permit — no payload bodies, no filesystem '
   'paths, no secrets.';
@@ -1001,6 +1103,10 @@ export interface RecapRequest {
   delegated: RecapSource[];   // [] for an assistant; ["mail","calendar"] for the owner
   ahead_days: number;         // the forward horizon, stated rather than implied
   timezone: string;           // IANA name; the box is never left to infer one
+  // "en" | "zh-TW" — a PROMPT hint, never a toolset. `import type { Lang }` from
+  // i18n.ts, not a plain import: that file is "use client", and a type-only
+  // import is erased rather than pulling a client module into a server one.
+  lang: Lang;
   since: string;              // the floor this run was given
 }
 
@@ -1008,7 +1114,7 @@ export interface RecapRequest {
 export interface RecapResult {
   kind: "dovis.recap.v1";
   turn_id?: string;           // present on the ECHO branch; absent under adjacency
-  result: "success" | "empty" | "error";
+  result: "success" | "empty" | "partial" | "error";
   coverage: Partial<Record<RecapSource, "ok" | "unavailable">>;
   timezone?: string;          // the zone the run actually rendered times in
 }
@@ -1017,7 +1123,21 @@ export type RecapVerdict =
   | { advance: true;  result: "success" | "empty"; timezone: string | null;
       covered: RecapSource[] }
   | { advance: false; reason: "malformed" | "errored" | "partial";
-      blind: RecapSource[] };
+      blind: RecapSource[];
+      // The mirror of `blind`, computed exactly as on the advance branch:
+      // `delegated` intersected with the keys the reply reported "ok" for. It
+      // drives nothing on screen here — it is carried because the PARTIAL
+      // statement SUBTRACTS it, which is how a source that recovered on a run
+      // that stayed blind on another one loses its blind_since key. Empty on
+      // `malformed` and `errored`, which write neither statement.
+      covered: RecapSource[];
+      // `partial` only, and both are FILLED BY THE ROUTE after this pure
+      // function returns — `since` from the blind_since map the route has just
+      // written, `runs` from a bounded read of the conversation. Neither is ever
+      // stored as a counter, so a reply re-confirmed in a later session
+      // recomputes the same two numbers instead of inflating them.
+      since?: string | null;
+      runs?: number };
 
 /** `request` and `reply` are the raw `meta` values as loaded from Postgres,
  *  never anything the browser sent; `turnId` is the id of the turn the route
@@ -1030,12 +1150,15 @@ export function verifyRecapReply(
 ): RecapVerdict;
 ```
 
-**`covered` is on the advance branch because the UI needs it and must not compute
-it.** It is `delegated` intersected with the keys the reply reported `"ok"` for,
-and it is what `recap.ahead` is gated on — see the two intersection rules below.
-The non-advance branch carries only `blind`, because on that branch the period
-header is withheld and `recap.ahead` is withheld with it, so there is nothing for
-`covered` to drive.
+**`covered` is on both branches, because on one the UI needs it and on the other
+the write does, and neither may compute it for itself.** It is `delegated`
+intersected with the keys the reply reported `"ok"` for. On the advance branch it
+is what `recap.ahead` is gated on — see the two intersection rules below. On the
+non-advance branch it drives nothing on screen, since the period header is
+withheld there and `recap.ahead` is withheld with it; it is carried because the
+partial statement subtracts it, and a route holding only `blind` would have no
+way to name the sources that *did* read and so no way to drop the key of one that
+recovered on a run that stayed blind on another.
 
 **Validation is structural first and semantic second.** `kind` is checked before
 anything else, and it carries a version. A box upgraded to emit a different shape
@@ -1045,8 +1168,15 @@ document that means something else. That is the whole reason the discriminator i
 there; a bare `{result: "success"}` would be indistinguishable from any other
 JSON object that happened to have that key.
 
-Then: `result` must be one of exactly three literals, and `coverage` must be an
-object whose values, for the keys that matter, are one of exactly two literals.
+Then: `result` must be one of exactly four literals — `success`, `empty`,
+`partial`, `error` — and `coverage` must be an object whose values, for the keys
+that matter, are one of exactly two literals. **`partial` is a floor on the
+verdict, never a ceiling.** A reply declaring `partial` cannot advance whatever
+its coverage map says, so a box that knows it went short can say so directly; a
+reply declaring `success` is still reduced to a `partial` verdict when coverage
+falls short of `delegated`, so a box that forgets to say so gains nothing. The
+literal can only ever make the verdict worse, which is the same direction
+coverage runs in and the reason neither can be used to widen anything.
 Unknown keys are ignored rather than rejected, so the box may report a source
 this dashboard has not heard of without breaking every recap — and an unknown key
 can never widen anything, because **both** gates that read `coverage` are
@@ -1089,12 +1219,15 @@ looks — so it is worth being loud about in the place where loudness helps.
 **`verifyRecapReply` is pure, server-only, and it gets a unit test.** Vitest is
 already a devDependency and `npm test` already runs it, so
 `tests/recap-envelope.test.ts` costs almost nothing: one fixture per verdict —
-conforming and complete, conforming and partial, `result: "error"`, and three
-flavours of malformed (missing `kind`, wrong `kind`, `coverage` absent) — plus
-two that pin the rules an implementer is most likely to soften. A conforming
-reply with **no** `turn_id`, on the adjacency branch, must still verify. And an
-assistant's `delegated: []` request against a reply claiming
-`coverage: {calendar: "ok"}` must come back with `covered` empty. This is the
+conforming and complete, conforming and short of coverage, `result: "error"`, and
+three flavours of malformed (missing `kind`, wrong `kind`, `coverage` absent) —
+plus three that pin the rules an implementer is most likely to soften. A
+conforming reply with **no** `turn_id`, on the adjacency branch, must still
+verify. An assistant's `delegated: []` request against a reply claiming
+`coverage: {calendar: "ok"}` must come back with `covered` empty. And an explicit
+`result: "partial"` whose coverage map reports every delegated source `"ok"` must
+still refuse to advance — the literal is a floor, and a test is the only thing
+that stops someone "simplifying" it into a value derived from coverage. This is the
 cheapest test in the feature and it guards the only function that decides whether
 a window is burned — and, now, whether a forward claim is printed.
 
@@ -1186,9 +1319,11 @@ the queue delta and the unresolved threads — the halves `/api/recap` assembles
 itself, out of `todos` rows that are small, bounded by activity, and already
 partly repeated by design, since open, `failed`, `modifying` and high-priority
 items are reported unconditionally on every run regardless of the window. Nothing
-re-reads a mailbox. **It is loud.** Every one of those recaps renders
-`recap.partial` naming mail, so the degraded state announces itself daily instead
-of hiding behind a clean-looking recap that quietly covers less than it says.
+re-reads a mailbox. **It is loud, and it gets louder.** Every one of those recaps
+names mail in a warning, so the degraded state announces itself daily instead of
+hiding behind a clean-looking recap that quietly covers less than it says — and
+from the second day the warning escalates, on the schedule set out immediately
+below.
 **And it is lossless.** The moment Google is reconnected, the first fully covered
 run advances the floor from wherever it was still sitting, and everything that
 accumulated in between is reported in that run rather than skipped. The floor
@@ -1202,6 +1337,106 @@ nothing from days eight to thirty, and the next capped run does the same, which
 is a hole rebuilt by hand. If the width of a catch-up recap becomes a real problem
 it is a prose problem — Dovis summarising a long period more coarsely — never a
 floor problem.
+
+**Escalation, decided 2026-09-05.** The same daily `recap.partial` line for a
+credential that died last Tuesday is a warning the boss has already learned to
+scroll past, and Aaron closed that with a two-part instruction: after 24 hours,
+show a persistent and stronger warning naming the time — *"Email access has been
+unavailable since [time]. This recap may be incomplete."* — and escalate visually
+after repeated failures. His instruction ends with the sentence that governs the
+whole of it: **never advance `last_seen_at` past unread or unavailable email
+data.** Everything below is a change of *volume*, and nothing below is a change of
+*floor*.
+
+**Level one — any blind run.** The chat renders `recap.partial`, exactly as it
+does today, naming the blind sources. The Team page shows nothing. One bad morning
+is a blip, and a dashboard-wide banner for a blip is how a warning gets ignored by
+the time it means something. The floor does not move.
+
+**Level two — the source has been dark for 24 hours or more**, measured from its
+key in `blind_since` against the current run's turn time. The chat line becomes
+`recap.partialSince`, which names the source *and the instant*, so the boss reads
+a duration rather than a repeated complaint. And the warning leaves the chat: the
+**Team page's Google card** renders `googleBlindWarning` persistently — on every
+load of that page, with no recap on screen and no chat open. That is what
+"persistent" has to buy, because the boss who has stopped opening the chat is
+exactly the boss who most needs telling, and the card is where the fix lives: the
+`googleReconnect` button is already six inches away. The floor still does not
+move; `recap.partialSince` says so in the same sentence, reusing `runFailed`'s
+second clause the way `partial` already does.
+
+That the card is behind `Gate requireOwner` costs nothing, and it is worth saying
+why rather than leaving a reader to wonder whether assistants are being kept in
+the dark. An assistant's run delegates nothing, so an assistant's `blind_since`
+is permanently empty and there is no warning of theirs to hide. The only account
+that can go blind is the only account that can see the card, and it is the only
+account that could fix the credential anyway.
+
+**Level three — repeated failure.** The chat adds `recap.partialRepeated` on its
+own line beneath `partialSince` once **three or more consecutive confirmed runs
+have reported the same source short**, and the Google card's warning takes the
+destructive treatment the Danger zone already uses — same tokens, not a new
+colour — and gains `googleBlindStale` once `blind_since` is **72 hours or more**
+old. This is the visual escalation Aaron asked for, and it is the last one: there
+is no level four, because a warning that keeps growing teaches the reader that the
+current size is never the real size. The floor still does not move, and it must
+not be made to: a design that resolved a loud warning by advancing the mark would
+be announcing a hole while digging it.
+
+**Those are two thresholds for one escalation, and the reason is the next
+subsection rather than an oversight.** The chat escalates on a count of runs
+because the route that renders it has the rows in hand; the card escalates on
+elapsed time because the Team page has `profiles` and nothing else. Three runs
+and three days are the same event for a boss with a daily habit, and each surface
+states the axis it actually measured rather than borrowing the other's word.
+
+**The count decides; the timestamp speaks.** Level three's chat half is *gated* on
+the number of consecutive blind runs, but no rendered string interpolates that
+number. `recap.partialRepeated` says "three or more in a row", which the gate has
+already proved and which no cap can falsify, and every quantity a reader actually
+sees — the instant in `recap.partialSince`, the day count in `googleBlindStale` —
+is computed from `blind_since`, a recorded timestamp. That split exists because of
+how the count is obtained.
+
+**The count is derived at read time and never stored.** `/api/recap/seen`, which
+already holds the conversation under `service_role`, reads that conversation's
+newest `dovis` replies newest-first and counts forward while each reports the
+source short, stopping at the first reply that reports it `ok` or after twenty
+rows. It returns the number on the verdict, and the browser renders from the
+verdict as it does with everything else on this route. **A counter column would be
+wrong here, not merely heavier.** The reconciliation path re-confirms a reply the
+browser missed, and `greatest()` makes a repeated *advance* a no-op precisely
+because it is idempotent; an incremented counter is not, so one reply confirmed
+again in a later session would inflate the number and escalate a warning on
+evidence that did not exist. Recomputing costs one bounded query on a route that
+runs once per recap.
+
+**The twenty-row bound cannot change a rendered decision**, which is the reason it
+is safe: the only threshold is three, so a walk that stops at twenty has long
+since decided. It bounds the query, not the truth.
+
+**Where the two axes disagree, each string still tells the truth about its own.**
+A boss who runs one recap a week reaches 72 hours long before he reaches three
+runs, so the card can be shouting while the chat is not — which is right, because
+three days *have* passed and three recaps have not. Neither string ever says a
+bare "repeatedly": the chat line says *recaps in a row*, the card says *days*, and
+a reader can always tell which question was asked. Giving the card the count
+instead would mean either a second query on a page that makes none, or a stored
+counter, and the paragraph above rules the counter out.
+
+**Recovery of a source and recovery of the floor are two different events, and an
+earlier draft collapsed them.** A source's key leaves `blind_since` on the first
+run that reports *that source* `ok`, whichever branch the verdict takes: the
+advance branch empties the map, and the partial branch subtracts `covered` too,
+so mail coming back on a run the calendar is still failing clears mail's key on
+that same run. Both warnings stop naming mail immediately, which is the whole
+point of recording darkness per source. The *floor*, by contrast, advances only
+on full coverage, because a run that could not read the calendar has not covered
+the period and the mark either says it has or says nothing. So the last source to
+recover is the one holding the floor, and when it reads, the floor advances from
+wherever it had been sitting all along — the catch-up run reports everything that
+accumulated during the outage. That is the lossless property argued above, and
+the escalation was only ever the noise around it.
 
 **`last_scan_at` is gated identically, and that is deliberate.** A partially blind
 run could be argued to prove *somebody looked*. It does not prove the sentence
@@ -1249,29 +1484,50 @@ So keep them apart:
 - **The window and zone `/api/recap` returns are per-run state**, held for that
   run's header and nothing else. They are what the pending bubble and the
   delivered reply are labelled with, and they never touch the session.
-- **`session.profile.last_seen_at`, `last_scan_at` and `timezone` are patched
-  only from the `/api/recap/seen` response**, which returns the verdict it
-  computed, the reply id it evaluated, and exactly what it wrote — including on
-  the reconciliation call, which is that same route. There is no second path and
-  no inference: if no confirmation happened, or the route refused to advance, the
-  session keeps the old values, which is the truth.
+- **`session.profile.last_seen_at`, `last_scan_at`, `timezone` and `blind_since`
+  are patched only from the `/api/recap/seen` response**, which returns the
+  verdict it computed, the reply id it evaluated, and exactly what it wrote —
+  including on the reconciliation call, which is that same route, and including
+  on the `partial` branch, which writes `blind_since` while writing no mark at
+  all. There is no second path and no inference: if no confirmation happened, or
+  the route refused to advance, the session keeps the old values, which is the
+  truth.
 
 The patch itself is the idiom `changePassword` already uses:
 
 ```ts
 setSession((s) =>
   s
-    ? { ...s, profile: { ...s.profile, last_seen_at: seen, last_scan_at: scan, timezone: zone } }
+    ? {
+        ...s,
+        profile: {
+          ...s.profile,
+          last_seen_at: seen,
+          last_scan_at: scan,
+          timezone: zone,
+          blind_since: blind,
+        },
+      }
     : s,
 );
 ```
 
+`blind_since` is in that patch specifically because the Team page's Google card
+reads it, and the card is a different surface from the chat: a boss who confirms a
+blind recap and then navigates to Team must find the warning already there rather
+than after a reload.
+
 `Profile` in `src/lib/types.ts` gains `last_seen_at: string | null`,
-`last_scan_at: string | null` and `timezone: string | null` in the same change —
-that file's own comment requires it to mirror the schema exactly. **That will
+`last_scan_at: string | null`, `timezone: string | null` and
+`blind_since: Partial<Record<"mail" | "calendar", string>> | null` in the same
+change — that file's own comment requires it to mirror the schema exactly. The
+union is spelled out rather than imported as `RecapSource`, because `recap.ts` is
+server-only and `types.ts` is read by the browser — a duplicated two-member union
+is a smaller cost than a client file importing a server one, and it is the same
+trade `types.ts` already makes against the schema. **That will
 break the build until the fixtures are updated, which is the point:**
 `demoProfiles` in `src/lib/demo-data.ts` is typed `Profile[]` and built from
-plain object literals, so three new required fields fail `tsc` there immediately.
+plain object literals, so four new required fields fail `tsc` there immediately.
 The fixture in `tests/payload-route.test.ts` ends in `as Profile` and compiles
 regardless. So it is the demo data — not the tests — that the compiler forces you
 to think about, and the demo data is exactly where you have to decide what a
@@ -1777,7 +2033,7 @@ reading `meta` for itself.
 | Working | The user's turn is in the thread; a pending Dovis bubble with `recap.working`. The trigger is `disabled` while in flight, matching `queue.tsx` and `refresh-control.tsx`. |
 | Delivered — success | An ordinary Dovis bubble rendering `content`, with `recap.sinceDate` (or `recap.sinceFirst`) above it — and `recap.ahead` **only when `calendar` is in the verdict's `covered`**, which means the run both delegated it and got `"ok"` back. Requires a verdict of `advance`. Both marks advanced. |
 | Delivered — empty | `recap.nothingNew`, interpolating the `last_scan_at` the confirmation route just returned. Rendered from the verdict, not from `content`, and only on `advance`. Both marks advanced. |
-| Delivered — partial | The prose renders, with `recap.partial` naming the verdict's `blind` sources and **no period header** — the run cannot be shown to have covered the period it was given. **`recap.ahead` does not render either**, even when the calendar was the source that *did* read: it is an extension of the period header, and there is no header for it to extend. The calendar material is in the prose regardless. **Neither mark advanced**, and the next recap re-covers the period. |
+| Delivered — partial | The prose renders, with `recap.partial` naming the verdict's `blind` sources and **no period header** — the run cannot be shown to have covered the period it was given. **`recap.ahead` does not render either**, even when the calendar was the source that *did* read: it is an extension of the period header, and there is no header for it to extend. The calendar material is in the prose regardless. **Neither mark advanced**, and the next recap re-covers the period. `recap.partialSince` replaces `recap.partial` once `blind_since` shows the source dark for 24 hours or more, and `recap.partialRepeated` joins it beneath at three blind runs in a row — both are changes of volume, and neither changes what advanced, which is nothing. |
 | Delivered — error | `recap.runFailed` plus `recap.retry`. Covers both `result: "error"` and a reply whose envelope failed validation, which look identical to the boss and differ only in the server log. The prose still renders; the period header and `recap.ahead` do not. **Neither mark advanced.** Never either empty message. |
 | No reply yet | After **90 seconds**, refetch the thread once. If still nothing: `recap.noReplyYet` plus `recap.checkAgain`. Neither mark has moved. |
 | Failed to send | The POST itself failed — auth, HMAC timestamp outside ±300s, box unreachable, or the route's own queue assembly failed before forwarding. `recap.failed` plus `recap.retry`. Nothing was read and nothing was marked. |
@@ -1847,6 +2103,19 @@ recap: {
   runFailed:    "Dovis couldn't finish this recap, so nothing has been marked as reviewed.",
   // {sources} is built from `sources` below, joined with `sourceJoin`.
   partial:      "Dovis couldn't read {sources} this time, so nothing has been marked as reviewed.",
+  // Replaces `partial` once blind_since shows the source dark for 24 hours or
+  // more. {when} is that recorded instant — the first run that FOUND it dark,
+  // never a claim about when access was actually lost.
+  // WHEN {sources} NAMES MORE THAN ONE SOURCE there is still only one {when},
+  // and the keys were written on different runs, so interpolate the MOST RECENT
+  // instant among the named keys and never the earliest: mail dark since Monday
+  // and the calendar since Wednesday renders "since Wednesday", which
+  // under-claims mail's outage by two days rather than over-claiming the
+  // calendar's — the same safe direction as the rest of this section.
+  partialSince: "Dovis hasn't been able to read {sources} since {when}. This recap may be incomplete, and nothing has been marked as reviewed.",
+  // A second line beneath partialSince at three or more blind runs in a row. No
+  // count is interpolated: the gate has proved "three or more" and nothing else.
+  partialRepeated: "Three or more recaps in a row have come back incomplete. Reconnect Google on the Team page — until then every recap covers a widening period.",
   sources:      { mail: "your mail", calendar: "your calendar" },
   sourceJoin:   " and ",
   noReplyYet:   "No reply yet. The run may still be going.",
@@ -1877,6 +2146,14 @@ recap: {
   neverRun:     "還沒有產生過任何進度整理。",
   runFailed:    "Dovis 沒能完成這次整理，進度標記維持不變。",
   partial:      "Dovis 這次讀不到{sources}，進度標記維持不變。",
+  // blind_since 顯示該來源已中斷 24 小時以上時，改用這一句。
+  // {when} 是「第一次發現讀不到」的時間，不宣稱存取是何時失效的。
+  // {sources} 同時列出多個來源時，{when} 只有一個：一律取這幾個 key 之中「最晚」
+  // 的那個時間，絕不取最早的。各來源是在不同次執行才被記錄的，寧可少算中斷時間，
+  // 也不要幫其中一個來源誇大。
+  partialSince: "Dovis 從 {when} 起就讀不到{sources}。這次整理可能不完整，進度標記維持不變。",
+  // 連續三次以上讀不到時，接在 partialSince 下面另起一行；不帶入次數。
+  partialRepeated: "已經連續三次以上的整理都不完整。請到團隊頁面重新連結 Google；在那之前，每次整理涵蓋的期間都會愈拉愈長。",
   sources:      { mail: "你的郵件", calendar: "你的行事曆" },
   sourceJoin:   "與",
   noReplyYet:   "還沒有回覆，執行可能還在進行中。",
@@ -1890,20 +2167,43 @@ recap: {
 },
 ```
 
-Three more keys sit at the top level beside `googleTitle`, because they belong to
+Five more keys sit at the top level beside `googleTitle`, because they belong to
 the Team page rather than to the chat:
 
 ```ts
 timezoneTitle:   "Time zone",
 timezoneHint:    "Every time in a recap is shown in this zone. Dovis fills it in from your Google Calendar the first time it reads one — set it here if you would rather choose.",
 timezoneInvalid: "That is not a time zone Dovis recognises.",
+// The Google card's persistent warning, from 24 hours dark onward. {sources} is
+// built from t.recap.sources and t.recap.sourceJoin — one vocabulary for the
+// sources, wherever they are named. Same {when} rule as recap.partialSince: with
+// more than one source named, interpolate the MOST RECENT instant among the
+// named blind_since keys, never the earliest. The second clause — "Every recap
+// since then has been incomplete" — inherits that instant, so the earliest key
+// would over-claim this sentence twice over.
+googleBlindWarning: "Dovis has not been able to read {sources} since {when}. Every recap since then has been incomplete, and nothing has been marked as reviewed.",
+// Added beneath it at 72 hours dark or more, with the Danger zone's destructive
+// treatment. {days} is computed from blind_since at render — the card has no
+// conversation to walk, so it escalates on time where the chat escalates on runs.
+googleBlindStale:   "Still unavailable after {days} days.",
 ```
 
 ```ts
 timezoneTitle:   "時區",
 timezoneHint:    "進度整理中的所有時間都以這個時區顯示。Dovis 第一次讀到你的 Google 行事曆時會自動填入——你也可以在這裡自己指定。",
 timezoneInvalid: "這不是 Dovis 能辨識的時區。",
+// 與 recap.partialSince 相同的 {when} 規則：{sources} 列出多個來源時，
+// 取這幾個 key 之中「最晚」的那個時間，絕不取最早的；後半句「在那之後的每次
+// 進度整理都不完整」也是以同一個時間為準。
+googleBlindWarning: "Dovis 從 {when} 起就讀不到{sources}。在那之後的每次進度整理都不完整，進度標記也維持不變。",
+googleBlindStale:   "已經持續 {days} 天讀不到。",
 ```
+
+**The card borrows `t.recap.sources` and `t.recap.sourceJoin` rather than
+carrying its own nouns.** 「你的郵件」 has to read the same on the Google card as
+it does inside a recap, because the two sentences are about the same failure and
+a boss comparing them should not have to wonder whether they mean the same
+thing — and one vocabulary is also one place for a translator to change it.
 
 **`sourceJoin` rather than `Intl.ListFormat`.** The list never exceeds two items
 today and would never exceed a handful, and a list formatter's conjunction and
@@ -1920,7 +2220,7 @@ normalised turn against the union of every language's list, not just the viewer'
 current one, because the toggle is per-viewer and a boss who switches to English
 mid-session should not lose his Chinese phrases.
 
-Five register decisions against the shipped dictionary. `quickAction` is
+Six register decisions against the shipped dictionary. `quickAction` is
 「補進度」, three characters, because every other action label is two to four
 (`確認` / `修改` / `退回` / `重新整理` / `顯示`) and the earlier 「幫我補進度」 is
 a seven-character sentence that will not sit in a row beside them — it survives
@@ -1935,12 +2235,17 @@ sentences are different columns. 「執行可能還在進行中」 replaces
 than the ordinary Taiwan technical register. And `sampleTag` is 「範例」 rather
 than 「示範」, because 示範 already labels the whole deployment in `demoBanner`
 (「示範資料」); 範例 labels this one artefact inside it, and a reader has to be
-able to tell those two apart at a glance.
+able to tell those two apart at a glance. And `partialRepeated` says
+「重新連結 Google」 using `googleReconnect`'s exact word rather than
+「重新綁定」, because the sentence is telling the boss to press that specific
+button and the words in the instruction should be the words on the control.
 
-**`partial` reuses `runFailed`'s second clause on purpose**, in both languages.
-The boss is being told the same operational fact — nothing was marked, the period
-will come round again — and only the reason differs. Two different phrasings for
-one consequence would invite him to think the consequences differ.
+**`partial` and `partialSince` both reuse `runFailed`'s second clause on
+purpose**, in both languages. The boss is being told the same operational fact —
+nothing was marked, the period will come round again — and only the reason and
+the duration differ. Two different phrasings for one consequence would invite him
+to think the consequences differ, and the escalation must not read as though the
+floor behaves differently once the warning gets louder. It does not.
 
 **`unavailable` changed in both languages, and the old copy must not survive.**
 It used to read "It does nothing on the demo" / 「示範站台不會有」, which is now
@@ -1953,9 +2258,9 @@ Nested under `recap` to match `t.status.*` and `t.action.*`. The
 `i18n.ts` covers nested shape, so a key added to `en` and forgotten in `zh-TW`
 fails the build rather than rendering `undefined` mid-sentence — which is exactly
 the behaviour wanted for `triggerAriaFirst`, `ahead`, `nothingNew`, `neverRun`,
-`runFailed`, `partial`, `sources`, `sourceJoin`, `sampleTag`, `sampleHeader`,
-`timesIn` and the three timezone keys, all of which must land in both
-dictionaries or in neither. The assertion does **not** check that `triggers` is
+`runFailed`, `partial`, `partialSince`, `partialRepeated`, `sources`,
+`sourceJoin`, `sampleTag`, `sampleHeader`, `timesIn` and the five Team-page keys,
+all of which must land in both dictionaries or in neither. The assertion does **not** check that `triggers` is
 non-empty — `string[]` satisfies the type when empty — so one unit test asserting
 every language's `triggers[0]` exists is worth the three lines, since an empty
 array silently disables typed triggering for that language and nothing else would
@@ -1984,10 +2289,104 @@ One honest gap: the chrome follows the viewer's toggle, but the recap **body**
 comes from Hermes, whose default language is set on the box. A 繁中 viewer can
 get Chinese headings around English prose. The three dashboard-rendered outcomes —
 `empty`, `partial` and `error` — escape this entirely, because they are dictionary
-strings rather than model output; only `success` carries the risk. The fix is for
-`/api/recap` to forward the viewer's `lang` as a prompt hint — it selects a
-prompt, not a toolset, so the route binding is untouched. Worth confirming rather
-than assuming; it is question 2 at the foot.
+strings rather than model output; only `success` carries the risk.
+
+**Decided 2026-09-05: `/api/recap` sends the language as a prompt hint.** Aaron's
+words: the server must derive the language from the authenticated dashboard
+preference, not trust arbitrary request data, and the structured response envelope
+stays language-independent and must still be validated as `success | empty |
+partial | error`. The hint selects a prompt, not a toolset, so the route binding
+is untouched; it rides on the request turn's `meta` as `lang`, beside `timezone`,
+for the same reason — a value the run was *given* is recorded by the side that
+gave it.
+
+**The envelope does not move with it, and that is a rule rather than an
+observation.** `kind`, `result` and `coverage` are ASCII literals in every
+language, and a `result: "成功"` is `malformed`. Localising the envelope would
+turn `verifyRecapReply` into a translation table and hand the box a second way to
+be misread; the prose is the only thing the hint may change.
+
+**VERIFIED FINDING: there is no authenticated dashboard language preference to
+derive from.** Language lives entirely in the browser. `LANG_STORAGE_KEY` is
+`"dovis.lang"` in `src/lib/i18n.ts`, and `ThemeProvider` in
+`src/components/theme-provider.tsx` reads it from `window.localStorage` on mount
+and writes it back in `setLang`. Nothing sends it anywhere. And `profiles` has no
+`lang` column: its columns are `id`, `email`, `username`, `display_name`, `role`,
+`status`, `can_modify`, `must_change_password`, `created_at` and
+`last_sign_in_at`. **So the server cannot today derive what Aaron asked it to
+derive**, and this has to be said before anything is built rather than discovered
+by an implementer reaching for a column that is not there.
+
+**Recommendation: add `profiles.lang`, on exactly the pattern Aaron chose for the
+timezone the same day.** A server route under `service_role` after
+`requireProfile()`, seeded from the browser toggle the first time an authenticated
+viewer sets one, and thereafter the source of truth that `/api/recap` reads:
+
+```sql
+-- PENDING AARON'S DECISION. Not part of the migration list at the foot until he
+-- says so; recorded here so the shape is not invented later under time pressure.
+alter table public.profiles
+  add column if not exists lang text
+  check (lang in ('en','zh-TW'));
+
+comment on column public.profiles.lang is
+  'The account holder''s own display language, and the prompt hint /api/recap '
+  'sends. SELF-SET, unlike timezone, which is owner-controlled: an assistant who '
+  'reads Chinese must not be forced into the owner''s English. Written only by '
+  'the account route under service_role after requireProfile(), seeded once from '
+  'the browser toggle. NULL means nobody has chosen, and the route falls back to '
+  'the validated enum on the request. The CHECK is the whole guarantee: a column '
+  'that can only ever hold one of two literals cannot carry a prompt.';
+```
+
+**One deliberate divergence from the timezone, stated because the two routes will
+sit beside each other and look copy-pasteable.** `/api/account/timezone` refuses
+an assistant unconditionally, because the zone every recap renders times in
+belongs to the account. Language is the opposite: it is a property of the reader,
+not of the account, and an assistant forced into the principal's language would be
+a worse product for no security gain. So the language route accepts a self-write
+from any active profile and an owner write against any row, and it is the one
+place in this design where those two differ.
+
+**The incidental benefit, stated honestly because it is not what Aaron asked
+for.** Today a boss's language does not follow him between devices. It is one
+browser's `localStorage` key, so the same account opened on his phone comes up in
+English and he sets it again. A column fixes that, and that is a real improvement
+— but it is an improvement arriving on the back of a prompt hint, which is
+precisely the kind of scope drift this document is supposed to name rather than
+smuggle.
+
+**The cost, equally honestly.** The existing toggle stops being a pure local
+preference and starts writing to the server: a network call, a failure path when
+that call fails, and two open tabs able to disagree until one reloads. The
+`localStorage` key stays as the first-paint source — the toggle must not wait on a
+fetch to render the right language on the first frame — with the column read at
+bootstrap and winning where the two differ. That is a second writer for one value,
+which is a small piece of real complexity in exchange for a hint. And it inherits
+the tightening above: with `and id <> auth.uid()` on `"owner updates"`, even the
+owner writes this through the route rather than through PostgREST.
+
+**The fair alternative, which needs no migration.** `/api/recap` accepts `lang`
+from the request body and validates it as exactly `'en' | 'zh-TW'`, rejecting
+anything else. That is a *claim* rather than a *record*, which is the distinction
+this document makes everywhere — but once the enum is enforced it is not
+*arbitrary* data, and the blast radius is one prompt hint on the caller's own
+recap. The worst a hostile or buggy client achieves is prose in the other
+language on its own screen. It is the same reasoning that already accepts the
+browser's zone as the last tier of the timezone ladder: a display preference is
+safe to take from a client in a way a timestamp is not.
+
+**AARON'S DECISION, still pending.** It is his because it widens what he asked
+for: he asked for a prompt hint and the honest way to give him one is a schema
+change, a route, and a toggle that talks to the server. It also edits a line
+already in this document's out-of-scope list — *"Default language is set by
+Hermes, not chosen in the dashboard. The existing EN / zh-TW toggle stays a
+per-viewer override"* — and a per-viewer override that persists per account is no
+longer only a per-viewer override. **Recommendation is the column**, because
+"derive from the authenticated preference" is what he actually said and the
+validated enum is a knowing second-best. Until he chooses, `/api/recap` resolves
+the hint the way the timezone resolves: `profiles.lang` if the column exists and
+is set, otherwise the validated enum from the request, otherwise `en`.
 
 ### Accessibility
 
@@ -2016,9 +2415,13 @@ announcement into it when the run resolves.
 
 **All five outcomes must announce, not only the successful one.** `success`
 announces `recap.sinceDate` or the reply's first line; `empty` announces
-`recap.nothingNew`; `partial` announces `recap.partial` **with the blind sources
-named**; `error` announces `recap.runFailed`; the 90-second timeout announces
-`recap.noReplyYet`. A screen-reader user who hears nothing after an errored or
+`recap.nothingNew`; `partial` announces whichever of `recap.partial` and
+`recap.partialSince` is on screen **with the blind sources named**, followed by
+`recap.partialRepeated` when the escalation is in force — the escalation is
+carried by wording as well as by treatment, which is why the louder state is a
+different string rather than only a redder box, and which is what lets it reach
+the audio channel at all; `error` announces `recap.runFailed`; the 90-second
+timeout announces `recap.noReplyYet`. A screen-reader user who hears nothing after an errored or
 partly blind run is left in the worst state this feature can produce — believing
 a complete recap arrived — which is the same conflation Aaron's decision forbids
 on screen, arriving through the audio channel instead. `partial` is the one most
@@ -2094,11 +2497,14 @@ visible label may hide below `sm` the way `RefreshButton`'s does
 (`hidden sm:inline`), because the `aria-label` carries the full sentence
 regardless. The period header **wraps rather than truncates** at 375 — a date cut
 off by an ellipsis is worse than a date on two lines, since the whole point of
-the line is the exact period. `recap.ahead` and `recap.partial` never appear
+the line is the exact period. `recap.ahead` and the partial family never appear
 together — the first renders only under a period header, the second only when
 there is none — and each sits on its own line rather than being appended to
 whatever is above it, so neither the forward claim nor the blind-source warning
-is the half that gets clipped.
+is the half that gets clipped. `recap.partialSince` and `recap.partialRepeated`
+are two lines rather than one long sentence for the same reason: at 375 the
+escalation must be the part that survives, and a clause appended to a wrapping
+warning is the part a reader's eye drops.
 
 **No new visual language.** The trigger uses the one sparkle identity the parent
 document requires of every chat entry point; the recap reply is an ordinary Dovis
@@ -2114,7 +2520,7 @@ rather than needing one of its own.
 Verification, mirroring the parent document's step 5 rather than inventing a
 different bar:
 
-- `npx tsc --noEmit` and `npm run build`. The three new `Profile` fields must
+- `npx tsc --noEmit` and `npm run build`. The four new `Profile` fields must
   break `src/lib/demo-data.ts` first; a green build before the fixtures are
   updated means the type change was never made.
 - `npm test`, with `tests/recap-envelope.test.ts` covering every verdict of
@@ -2162,6 +2568,40 @@ different bar:
   request never delegated.
 - **Delete `coverage` entirely from an otherwise perfect reply and confirm
   neither column moved.** Absence is failure; this is the check that proves it.
+- **Send `result: "partial"` with a coverage map reporting every delegated source
+  `"ok"` and confirm neither column moved.** The literal is a floor on the
+  verdict, and this is the check that stops it being derived away.
+- **The escalation, end to end.** Confirm a blind run writes `blind_since` and
+  leaves both marks byte-identical in Postgres. Backdate that key 25 hours and
+  confirm the chat line becomes `recap.partialSince` with the instant in it, that
+  the Team page's Google card raises `googleBlindWarning` **with no chat open**,
+  and that both marks are still unchanged. Take it to three blind runs in a row
+  and confirm `recap.partialRepeated` joins the chat line; backdate the key to 72
+  hours and confirm the card takes the destructive treatment with
+  `googleBlindStale` — and that the marks are *still* unchanged through both.
+  Then let one run come back fully
+  covered and confirm `blind_since` is emptied, both warnings vanish, and the
+  floor advances from where it had been sitting the whole time.
+- **Let mail recover on a run the calendar is still failing.** With
+  `blind_since` holding a mail key from Monday, send
+  `{"result":"partial","coverage":{"mail":"ok","calendar":"unavailable"}}` and
+  confirm `blind_since` afterwards holds the calendar key and *only* the calendar
+  key, that both marks are byte-identical, and that neither `recap.partialSince`
+  nor `googleBlindWarning` still names mail. The partial branch subtracts
+  `covered`; without that subtraction the stale mail key survives until a fully
+  covered run, which is the run the dark calendar is preventing.
+- **Backdate two `blind_since` keys to different days and confirm the rendered
+  instant is the LATER one.** Mail to Monday, the calendar to Wednesday, both
+  still dark: `recap.partialSince` and `googleBlindWarning` must name both
+  sources and interpolate **Wednesday**. The earliest key would over-claim the
+  calendar's outage by two days in a sentence that names it.
+- **Re-confirm one blind reply three times across two sessions and confirm the
+  rendered escalation is identical each time.** The count is derived and
+  `blind_since` is written only if absent, so a re-confirmation must move nothing
+  — this is the check that would catch a stored counter creeping in.
+- **Read the request turn's `meta` after a run and confirm it carries `lang`**,
+  and that the reply's `result`, `kind` and `coverage` are ASCII literals in both
+  languages. A localised envelope is `malformed`, by design.
 - **Delete `kind` and confirm the verdict is `malformed`**, the prose still
   renders, no period header attaches, and the server log says why.
 - Type each phrase in `recap.triggers` for both languages and confirm each one
@@ -2226,9 +2666,14 @@ descending order of how hard they are to lose:
 
 The sample carries no envelope and goes through no validation, because there is
 no reply row and no route: the demo renders the sample header and the sample
-prose directly. It must therefore never render `recap.partial`, `recap.nothingNew`
-or `recap.ahead` — all three are statements about a run that happened over a real
-period, and the sample's header exists to deny exactly that.
+prose directly. It must therefore never render `recap.partial`,
+`recap.partialSince`, `recap.partialRepeated`, `recap.nothingNew` or
+`recap.ahead` — every one of them is a statement about a run that happened over a
+real period, and the sample's header exists to deny exactly that. The two
+escalation strings are the easiest of the five to leak in, because a designer
+wanting to show the warning state in the showcase has an obvious reason to want
+them; a sample warning that a real mailbox has been unreadable since Tuesday is
+the fabrication this section forbids, wearing a timestamp.
 
 The fixture itself should read as obviously fictional, the way `demoTodos`
 already does: Stanley Chen and the Q3 budget, not a plausible stranger. A
@@ -2261,7 +2706,11 @@ recap runs against the real backend, or it says it cannot.
 | The reply's envelope is missing, malformed, or of an unrecognised `kind` | A reply that looks like a recap and cannot be verified as one | `verifyRecapReply` returns `malformed`, which is treated exactly as an error: neither mark advances, no period header attaches, the prose still renders, and the server logs a contract mismatch. Fails closed by construction, including against a future box that changes the shape. |
 | A deployment on the adjacency branch while the validator demands the echo | Every recap renders as a failure and nothing ever advances | The branch is one module constant, set with the box's configuration. `turn_id` is optional on the envelope; the route requires it only on the echo branch, and the two must be configured together. |
 | A partially blind run — expired Google refresh token, Workspace MCP down | Prose that reads complete while a whole source went unread | The delegated set is recorded on the request turn by this server. Every delegated source must report `ok`; **an unmentioned source counts as blind.** Neither mark advances, `recap.partial` names the source, and the next recap re-covers the period. Closed 2026-09-05. |
-| A source is blind for days | The floor does not move, so each recap repeats a widening queue delta | Accepted, and it is the deliberate cost of one floor. What repeats is the cheap half — rows this server assembles itself — and `recap.partial` says why, every single time, until somebody fixes the credential. Never fix it by capping how far back a run looks: that rebuilds the hole by hand. |
+| A source is blind for days | The floor does not move, so each recap repeats a widening queue delta | Accepted, and it is the deliberate cost of one floor. What repeats is the cheap half — rows this server assembles itself — and the chat says why every single time, until somebody fixes the credential. Never fix it by capping how far back a run looks: that rebuilds the hole by hand. |
+| The daily `recap.partial` line becomes wallpaper | A credential dead since Tuesday, warned about in a sentence the boss now scrolls past | Escalation, decided 2026-09-05. At 24 hours dark the chat line becomes `recap.partialSince`, naming the instant from `blind_since`, and the Team page's Google card raises a persistent `googleBlindWarning` beside the Reconnect button. At three blind runs in a row `recap.partialRepeated` joins the chat line; at 72 hours the card takes the destructive treatment with `googleBlindStale`. Two thresholds because the two surfaces can measure different things — runs in the chat, days on the card. Volume only: no escalation moves a mark. |
+| The boss stops opening the chat, so the only warning is somewhere he never looks | A silently degraded deployment | The 24-hour escalation deliberately leaves the chat for the Team page, which reads `profiles.blind_since` and renders with no recap on screen and no conversation loaded. |
+| A blind-run count inflated by re-confirmation | A warning escalating on evidence that never existed — the reconciliation path re-posts a reply a later session already saw | The count is derived at read time by walking the conversation's recent replies, never stored and never incremented. `blind_since` keys are written only if absent and cleared on recovery, so both the count and the instant are idempotent under repeated confirmation, exactly as `greatest()` makes the marks. |
+| A tidy-up that advances the floor to silence a loud warning | The escalation's own failure mode: the warning stops because the period was skipped, not because it was read | The partial branch writes `blind_since` and touches no mark, in a statement that does not contain `last_seen_at` or `last_scan_at`. Stated at every escalation point rather than once, because this is the change a later reader is most likely to make while "cleaning up" the recap. |
 | A forward calendar claim above a run that read no calendar | "Plus anything scheduled in the next 7 days" on an assistant's recap, or above a mail-blind one with no period header | `recap.ahead` is gated on the verdict's `covered` — `delegated` intersected with the `"ok"` keys — and only ever renders beneath a period header. A reply can subtract from the delegated set; it can never add to it. |
 | An error or a partial rendered as an empty recap | The boss reads "nothing new" about a mailbox nobody could open | Structurally impossible: `recap.nothingNew` is gated on a verdict of `advance` and interpolates `last_scan_at`, a column no errored, malformed or partially blind run can move. |
 | "No recap has been generated yet." above a recap that is on screen | The dashboard contradicting itself on the boss's first-ever run | The never-run copy is chosen from the absence of any `dovis` reply in the recap conversation, not from `last_scan_at === null` — which since the full-coverage gate also describes a first run that came back blind. |
@@ -2279,32 +2728,54 @@ its own small piece of work.
 
 ### Open questions — what is actually left
 
-All twelve of the original list are closed. Aaron answered ten on 2026-09-05,
-`/api/payload/[id]` answered its own when the route gained its `can_modify`
-check, and the twelfth — **the recap toolset** — closed in a second round the
-same day: a restricted per-route toolset is constructible, so `owner-recap` is
-built, and without `no_mcp`. That round also closed the two questions the first
-round had created: **the result envelope** (this server defines and validates it,
-and full coverage gates the floor) and **the timezone** (owner-controlled, seeded
-from the owner's calendar, set explicitly on the Team page otherwise).
+All twelve of the original list are closed, and so are the four this document's
+own answers created. Aaron answered ten on 2026-09-05, `/api/payload/[id]`
+answered its own when the route gained its `can_modify` check, and the twelfth —
+**the recap toolset** — closed in a second round the same day. The second round
+also closed **the result envelope** (this server defines and validates it, and
+full coverage gates the floor) and **the timezone** (owner-controlled, seeded from
+the owner's calendar, set explicitly on the Team page otherwise). The third round
+closed the last two: **the escalation** (24 hours to a persistent warning on the
+Team page's Google card, three blind runs in a row to a louder chat line, 72
+hours to a destructive card, and no escalation touches a mark) and **the language
+hint** (`/api/recap` sends it,
+derived server-side, with the envelope staying language-independent).
 
-Two remain, and both are small.
+Two things remain, and they are different in kind. One is a decision the third
+round created rather than closed. The other is not a decision at all — it is a
+fact about the box that nobody here can settle by thinking harder.
 
-1. **Does a source that stays blind for days eventually need something louder
-   than the same `recap.partial` line every morning?** The floor does not move
-   while it lasts, by decision above, and the catch-up run when the credential is
-   fixed reports everything that accumulated. What is undecided is whether a
-   fourth or fifth consecutive blind run should raise something on the dashboard
-   proper — the Team page's Google card is the obvious home — rather than only
-   inside the chat. **Any answer must leave the floor alone.** A design that
-   resolves this by advancing the floor to keep the recap tidy is the exact
-   failure this whole section exists to prevent.
-2. **Should `/api/recap` forward the viewer's `lang` as a prompt hint?** The
-   chrome follows the viewer's toggle; the prose comes from the box, whose
-   default language is set there, so a 繁中 viewer can get Chinese headings around
-   English paragraphs. A `lang` hint selects a prompt rather than a toolset, so it
-   does not touch the route binding — but it is a Hermes-side behaviour and it
-   should be confirmed rather than assumed, like everything else on that list.
+1. **`profiles.lang` — Aaron's, and the reason it is open is that answering him
+   properly costs more than he asked for.** He said the server must derive the
+   language from the authenticated dashboard preference. There is no such
+   preference: language is `localStorage["dovis.lang"]`, read and written in
+   `theme-provider.tsx`, and `profiles` has no `lang` column. So the fork is a
+   column plus a route plus a toggle that starts talking to the server, against a
+   validated `'en' | 'zh-TW'` on the request — a claim rather than a record, but
+   not arbitrary once the enum is enforced, and no worse in its worst case than
+   prose in the wrong language on the caller's own screen. **The recommendation is
+   the column**, because it is what he actually said and because it incidentally
+   fixes a real thing: today a boss's language does not follow him to his phone.
+   The argument in full, including the divergence from the timezone route, sits
+   with the strings above. **It blocks nothing.** The request turn carries `lang`
+   either way, so the wire shape does not change and the column can arrive after
+   the feature ships.
+2. **Can Hermes echo the turn id back on the reply?** A yes/no from the box, and
+   the only outstanding item that changes code rather than copy. With the echo,
+   the confirmation route pairs a reply to its request turn by id and the boss may
+   type freely during a run. Without it, the route falls back to the
+   unanswered-turn rule and refuses every confirmation where the boss typed while
+   a run was in flight — correct, and quietly more expensive than it sounds. It is
+   already on the asks list below; it is repeated here because it is the one
+   answer that decides which of two branches gets built, and the validator is
+   pinned to that branch by a module constant rather than by inference.
+
+**What is deliberately not on this list.** The escalation thresholds — 24 hours,
+three consecutive blind runs in the chat, 72 hours on the Google card, twenty
+rows of walk — and the split that has the chat count runs while the card measures
+days are all decided above rather than deferred. If one of them turns out wrong it is a number to change, not a
+question to reopen. **None of them may be changed by moving the floor**, which is
+the one sentence that has to survive every future edit to this section.
 
 ### Where it sits in the build order
 
@@ -2326,6 +2797,12 @@ one of them changes what gets built:
   is **not** evidence the Supabase write happened — the acknowledgement says the
   run was accepted and nothing more, so the persistence needs its own retry and
   its own log on the box.
+- **Accepting `lang` as a prompt hint** — `'en' | 'zh-TW'`, on the request beside
+  `timezone` — and letting it select the prose language of the reply. **The
+  envelope must not follow it.** `kind`, `result` and `coverage` stay ASCII
+  literals in every language; a localised `result` is `malformed` on this side and
+  advances nothing. Which value the dashboard sends is settled here, not there;
+  what is asked of the box is only that it honour a hint.
 - **Accepting the profile id and the turn id** on the request, and echoing the
   turn id back on the reply. **Whether the echo is possible is a yes/no that
   changes this side**: with it, the confirmation route pairs by id; without it, it
@@ -2344,7 +2821,8 @@ report honestly what it could see, and to name the turn it answered.
 The migrations are small and belong with the chat migration rather than a later
 one, so each table is altered exactly once:
 
-- `profiles.last_seen_at`, `profiles.last_scan_at`, `profiles.timezone`
+- `profiles.last_seen_at`, `profiles.last_scan_at`, `profiles.timezone`,
+  `profiles.blind_since`
 - `todos.decided_at`, and the `todos.created_at` not-null fix
 - `messages.meta`, which belongs to the chat migration because that is where
   `messages` is created, and which now carries the request record as well as the
@@ -2353,3 +2831,9 @@ one, so each table is altered exactly once:
   `and id <> auth.uid()`, mirroring `"owner deletes"` — which the timezone route
   depends on, since routing the owner's own settings through a server route buys
   nothing while the browser can write the row directly
+
+`profiles.lang` is **not** on that list, because it is Aaron's decision and it is
+still open. If he takes the column, it joins the `profiles` bullet and the table
+is still altered once; if he leaves it, the validated enum on the request needs no
+migration at all. That is the only reason the two are worth deciding before the
+migration is written rather than after.
