@@ -112,6 +112,9 @@ export const dict = {
     connectionStale: "Reconnecting — this may be out of date",
     connectionOffline: "Not live — this may be out of date",
     refreshDemo: "Demo data never changes on its own.",
+    payloadFailed: "Could not load the contents.",
+    draftsRestricted:
+      "Your account can see the queue but not the draft bodies.",
   },
   "zh-TW": {
     brand: "Dovis",
@@ -204,6 +207,8 @@ export const dict = {
     connectionStale: "重新連線中——內容可能不是最新",
     connectionOffline: "非即時——內容可能不是最新",
     refreshDemo: "示範資料不會自己變動。",
+    payloadFailed: "無法載入內容。",
+    draftsRestricted: "你的帳號可以檢視佇列，但看不到草稿內容。",
   },
 };
 

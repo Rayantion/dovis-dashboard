@@ -113,7 +113,10 @@ function QueueItem({ todo }: { todo: Todo }) {
   async function toggle() {
     const next = !open;
     setOpen(next);
-    if (next && !payload) {
+    // Without canModify the route answers 403, so asking is a round trip whose
+    // only outcome is a denial the panel already knows how to explain. The
+    // server check remains the enforcement; this just declines to guess wrong.
+    if (next && !payload && perms.canModify) {
       setLoading(true);
       setPayload(await loadPayload(todo.id));
       setLoading(false);
@@ -181,8 +184,14 @@ function QueueItem({ todo }: { todo: Todo }) {
               ) : payload ? (
                 <PayloadView payload={payload} actionType={todo.action_type} />
               ) : (
+                /*
+                  Denied and failed are different facts and must not share a
+                  sentence. "Could not load" told a read-only assistant the app
+                  was broken, when in fact it was working exactly as the owner
+                  configured it.
+                */
                 <p className="text-xs text-muted-foreground">
-                  Could not load the contents.
+                  {perms.canModify ? t.payloadFailed : t.draftsRestricted}
                 </p>
               )}
             </div>
