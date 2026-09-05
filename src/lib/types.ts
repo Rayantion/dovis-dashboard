@@ -67,8 +67,35 @@ export interface DraftEmailPayload {
   body: string;
 }
 
+/**
+ * A manual item, as the box actually writes it.
+ *
+ * Every field is optional and unknown keys are representable on purpose. This
+ * shape is produced on the box by an agent this repo never compiles against,
+ * stored in a `jsonb` column Postgres enforces no shape on, and read back through
+ * a blind `as` cast. That is three places a drift can hide, and it did: this
+ * interface said `{ detail: string }` while a real row carried seven keys and no
+ * `detail` at all, so the panel rendered empty and nothing — not the database, not
+ * the compiler — was in a position to complain.
+ *
+ * So the rule here is describe, never require. A renderer that trusts this list to
+ * be complete reproduces the same bug the day the box writes an eighth key, which
+ * is why `queue.tsx` also renders whatever it finds that is not named below.
+ */
 export interface ManualPayload {
-  detail: string;
+  /** The primary content: what the principal is being asked to actually do. */
+  task?: string;
+  /** Legacy. Older rows carry the whole item in this one string. Never assume it. */
+  detail?: string;
+  from?: string;
+  subject?: string;
+  event?: string;
+  deadline?: string;
+  location?: string;
+  /** A Gmail message id. A reference to show, not a link — nothing can open it. */
+  email_id?: string;
+  /** jsonb holds anything, so a value is `unknown` until the renderer narrows it. */
+  [key: string]: unknown;
 }
 
 export interface DashboardWidget {

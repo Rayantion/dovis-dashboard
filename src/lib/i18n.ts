@@ -115,6 +115,17 @@ export const dict = {
     payloadFailed: "Could not load the contents.",
     draftsRestricted:
       "Your account can see the queue but not the draft bodies.",
+    sourceEmail: "Source email",
+    sourceFrom: "Sender",
+    sourceSubject: "Subject",
+    sourceEvent: "Event",
+    sourceDeadline: "Deadline",
+    sourceLocation: "Location",
+    sourceMessageRef: "Message ref",
+    // Heading over keys this build has no label for. Deliberately vague, because
+    // by definition nobody here knows what the box put under them.
+    alsoInPayload: "Also in this item",
+    payloadEmpty: "This item arrived with nothing to show.",
   },
   "zh-TW": {
     brand: "Dovis",
@@ -209,6 +220,15 @@ export const dict = {
     refreshDemo: "示範資料不會自己變動。",
     payloadFailed: "無法載入內容。",
     draftsRestricted: "你的帳號可以檢視佇列，但看不到草稿內容。",
+    sourceEmail: "來源郵件",
+    sourceFrom: "寄件者",
+    sourceSubject: "主旨",
+    sourceEvent: "活動",
+    sourceDeadline: "期限",
+    sourceLocation: "地點",
+    sourceMessageRef: "郵件編號",
+    alsoInPayload: "這個項目還附帶",
+    payloadEmpty: "這個項目沒有可顯示的內容。",
   },
 };
 

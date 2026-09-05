@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useI18n } from "@/lib/i18n";
+import { useI18n, type Lang } from "@/lib/i18n";
 import { useDovis } from "@/lib/dovis-provider";
 import type {
   DraftEmailPayload,
@@ -283,14 +283,8 @@ function PayloadView({
 }) {
   const { t } = useI18n();
 
-  if (actionType === "manual") {
-    const c = payload.payload_current as ManualPayload;
-    return (
-      <p className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">
-        {c.detail}
-      </p>
-    );
-  }
+  if (actionType === "manual")
+    return <ManualView payload={payload.payload_current as ManualPayload} />;
 
   const current = payload.payload_current as DraftEmailPayload;
   const proposed = payload.payload_proposed as DraftEmailPayload;
@@ -349,4 +343,185 @@ function PayloadView({
       ) : null}
     </div>
   );
+}
+
+/*
+  The manual fields this build has a label for, in reading order rather than the
+  order jsonb happens to hold them. `task` and `detail` are not here because they
+  render as prose above the table.
+
+  Adding a key to this list can only ever upgrade a raw row to a labelled one — it
+  can never hide one, because everything absent from it still renders below.
+*/
+/*
+  Order specified by the deployment owner 2026-09-05, and it is not alphabetical
+  or schema order: it descends from what the item IS toward where it came from.
+  `event` and `subject` say what this is about, `from` says who raised it,
+  `deadline` and `location` are the particulars, and `email_id` is provenance —
+  a handle for tracing the item back, not something anybody reads.
+*/
+const SOURCE_FIELDS = [
+  { key: "event", label: "sourceEvent" },
+  { key: "subject", label: "sourceSubject" },
+  { key: "from", label: "sourceFrom" },
+  { key: "deadline", label: "sourceDeadline" },
+  { key: "location", label: "sourceLocation" },
+  { key: "email_id", label: "sourceMessageRef" },
+] as const;
+
+const LABELLED_KEYS = new Set<string>([
+  "task",
+  "detail",
+  ...SOURCE_FIELDS.map((f) => f.key),
+]);
+
+/**
+ * A manual item. Nothing in the payload is required and nothing is defaulted:
+ * a field that is absent renders as absence, not as a blank row or a dash.
+ *
+ * Everything below came out of somebody else's mail, so it is rendered exactly the
+ * way the draft subject and body beside it are — as text React escapes. No markup
+ * path, no linkification, and no "view original": `/api/google/*` is connect,
+ * callback and status only, so no route on this app can fetch a message.
+ */
+function ManualView({ payload }: { payload: ManualPayload }) {
+  const { t, lang } = useI18n();
+
+  const task = asText(payload.task);
+  const detail = asText(payload.detail);
+
+  const source = SOURCE_FIELDS.map((f) => ({
+    label: t[f.label],
+    // A message id is an opaque handle; a proportional face makes it unreadable.
+    mono: f.key === "email_id",
+    value: localiseIfTimestamp(asText(payload[f.key]), lang),
+  })).filter((row) => row.value.length > 0);
+
+  /*
+    The important half of this component. The bug it exists to fix was a renderer
+    that knew one key while the box was writing seven and said nothing about the
+    other six — knowing seven is the same bug one release later. So anything not
+    rendered above is rendered here under its raw key: an unlabelled `cc_count 4`
+    is worth more to the reader than a field nobody can see.
+
+    Key names are passed through from mail too, so they are capped in length.
+    Values are only wrapped, never truncated — cutting a value would hide the very
+    thing this block exists to reveal.
+  */
+  const extras = Object.entries(payload)
+    .filter(([key]) => !LABELLED_KEYS.has(key))
+    .map(([key, value]) => ({
+      key: key.length > MAX_KEY_CHARS ? `${key.slice(0, MAX_KEY_CHARS)}…` : key,
+      value: localiseIfTimestamp(asText(value), lang),
+    }))
+    .filter((row) => row.value.length > 0);
+
+  if (!task && !detail && source.length === 0 && extras.length === 0)
+    return <p className="text-xs text-muted-foreground">{t.payloadEmpty}</p>;
+
+  return (
+    <div className="space-y-3">
+      {/* `task` carries what the person has to do. It gets the width to say it. */}
+      {task ? (
+        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground">
+          {task}
+        </p>
+      ) : null}
+
+      {/* Legacy shape: older rows put the whole item in one string. Shown, never required. */}
+      {detail ? (
+        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words text-foreground">
+          {detail}
+        </p>
+      ) : null}
+
+      {source.length > 0 ? (
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            {t.sourceEmail}
+          </div>
+          {/*
+            A "View original email" control would go here. It cannot exist yet —
+            there is no authenticated route that can fetch a message body — and a
+            button that opens nothing is the theatre docs/ADDING-FEATURES.md
+            forbids. Build the route first, then the control.
+          */}
+          <dl className="mt-1.5 space-y-1 text-xs">
+            {source.map((row) => (
+              <div key={row.label} className="flex gap-2">
+                <dt className="w-20 shrink-0 text-muted-foreground">{row.label}</dt>
+                <dd
+                  className={cn(
+                    "min-w-0 flex-1 text-foreground break-words",
+                    row.mono && "font-mono break-all",
+                  )}
+                >
+                  {row.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ) : null}
+
+      {extras.length > 0 ? (
+        <div className="border-t border-border pt-2">
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            {t.alsoInPayload}
+          </div>
+          <dl className="mt-1.5 space-y-1 text-[11px] text-muted-foreground">
+            {extras.map((row) => (
+              <div key={row.key} className="flex gap-2">
+                <dt className="w-20 shrink-0 font-mono break-all">{row.key}</dt>
+                <dd className="min-w-0 flex-1 break-words">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const MAX_KEY_CHARS = 48;
+
+/**
+ * jsonb holds anything, so a value here can be a number, a boolean, a list or a
+ * nested object whatever its key implies. Everything becomes text; an empty result
+ * means the field renders as nothing at all.
+ */
+function asText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null || value === undefined) return "";
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    // Circular structures throw. Showing nothing beats crashing the panel.
+    return "";
+  }
+}
+
+/*
+  Only a machine timestamp is reformatted. "before the 5th" is what a person wrote,
+  and `new Date` would either reject it or silently guess at it, so the sender's own
+  words are the honest thing to render.
+*/
+const ISO_TIMESTAMP =
+  /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+function localiseIfTimestamp(value: string, lang: Lang): string {
+  if (!ISO_TIMESTAMP.test(value)) return value;
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return value;
+
+  // A date with no time is read as UTC midnight, so rendering it locally turns
+  // the 11th into the 10th for anyone west of Greenwich. Read it back in UTC.
+  const dateOnly = value.length === 10;
+  return at.toLocaleString(lang === "en" ? "en-GB" : "zh-TW", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    ...(dateOnly ? { timeZone: "UTC" } : { hour: "2-digit", minute: "2-digit" }),
+  });
 }
