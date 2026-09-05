@@ -9,7 +9,7 @@ import type { Profile } from "@/lib/types";
 
   It used to require only a session, which meant any signed-in assistant could
   read every draft Dovis had ever written for the owner. These tests pin the
-  decision Aaron made on 2026-09-05: the gate is `can_modify`, the same switch
+  decision taken on 2026-09-05: the gate is `can_modify`, the same switch
   the owner already turns on to let someone review proposals.
 
   The Supabase layer is mocked because what is under test is the authorization
