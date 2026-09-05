@@ -2,6 +2,10 @@
 
 import { createContext, useContext } from "react";
 
+// Type-only, so it is erased at compile time and the cycle with types.ts —
+// which imports `Lang` back from here — never exists at runtime.
+import type { AttentionLevel } from "@/lib/types";
+
 /*
   Bilingual EN / zh-TW, per SOUL.md: "Bilingual English and Traditional Chinese.
   For Chinese use Taiwan vocabulary — 軟體 not 軟件, 資料 not 数据, 快取 not 緩存,
@@ -126,6 +130,14 @@ export const dict = {
     // by definition nobody here knows what the box put under them.
     alsoInPayload: "Also in this item",
     payloadEmpty: "This item arrived with nothing to show.",
+    attentionGuide: "Attention guide",
+    attentionGuideHint:
+      "How much Dovis thinks each item is asking of you. It judges that from deadlines, commitments and risk in the message — never from how urgently the sender wrote.",
+    attentionNoneNote:
+      "An item with no block has not been judged. That is not the same as nothing to worry about.",
+    // Read aloud before the level, so the block is not just a colour and a word
+    // arriving out of nowhere. Never shown.
+    attentionLevel: "Attention level",
   },
   "zh-TW": {
     brand: "Dovis",
@@ -229,6 +241,11 @@ export const dict = {
     sourceMessageRef: "郵件編號",
     alsoInPayload: "這個項目還附帶",
     payloadEmpty: "這個項目沒有可顯示的內容。",
+    attentionGuide: "注意程度說明",
+    attentionGuideHint:
+      "Dovis 判斷每個項目需要你多少注意力。依據的是信件裡的期限、承諾與風險，不是寄件者把話說得多急。",
+    attentionNoneNote: "沒有標示的項目代表 Dovis 尚未判斷，不等於沒有問題。",
+    attentionLevel: "注意程度",
   },
 };
 
@@ -240,6 +257,55 @@ export type Dict = (typeof dict)["en"];
   `undefined` to a boss mid-sentence.
 */
 export const languages: Record<Lang, Dict> = dict;
+
+/*
+  The five attention levels, in both languages.
+
+  Separate from `dict` and explicitly annotated, because the assertion above
+  cannot do this job: `Dict` is `typeof dict.en`, so a level missing from `en`
+  only makes `Dict` smaller and nothing errors. Annotating against
+  `AttentionLevel` makes a sixth level a build failure in both languages
+  simultaneously, by name.
+
+  `label` and `meaning` are split at the dash the deployment owner wrote them
+  with, so the two can be laid out separately without either being re-worded.
+  The wording is theirs and is already calibrated: a level is a judgement, so
+  nothing here says confirmed, verified or safe, and nothing here hardens when
+  you switch language — 緊急 carries exactly what "Urgent" carries.
+
+  snake_case keys break the camelCase house style deliberately: it makes
+  ATTENTION_LABELS[lang][level] a direct index with no mapping table between the
+  union and the dictionary. A mapping table would be a third thing to keep in
+  sync and the first to rot.
+*/
+export const ATTENTION_LABELS: Record<
+  Lang,
+  Record<AttentionLevel, { label: string; meaning: string }>
+> = {
+  en: {
+    informational: {
+      label: "Informational",
+      meaning: "worth knowing, no action required",
+    },
+    attention: { label: "Attention", meaning: "review when convenient" },
+    action_soon: {
+      label: "Action soon",
+      meaning: "a deadline or decision is approaching",
+    },
+    urgent: { label: "Urgent", meaning: "requires prompt attention" },
+    critical: {
+      label: "Critical",
+      meaning: "significant security, financial, or time-sensitive risk",
+    },
+  },
+  "zh-TW": {
+    informational: { label: "參考", meaning: "知道就好，不需要處理" },
+    attention: { label: "留意", meaning: "有空時再看" },
+    action_soon: { label: "近期要處理", meaning: "期限或決定快到了" },
+    urgent: { label: "緊急", meaning: "需要立即處理" },
+    critical: { label: "嚴重", meaning: "牽涉重大的安全、金錢或時效風險" },
+  },
+};
 
 export const LangContext = createContext<{
   lang: Lang;

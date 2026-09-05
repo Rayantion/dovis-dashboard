@@ -3,6 +3,7 @@
 import * as React from "react";
 import { ChevronDown, Mail, Hand, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { AttentionBlock } from "@/components/attention";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -172,6 +173,18 @@ function QueueItem({ todo }: { todo: Todo }) {
               <span className="text-status-failed font-medium">· priority</span>
             ) : null}
           </div>
+
+          {/*
+            Below the meta line rather than in it: the meta line is a row of
+            facts about the item, and this is a judgement about it. A row nobody
+            has judged renders nothing here and the card closes up — see
+            AttentionBlock, which is the only thing that decides that.
+          */}
+          <AttentionBlock
+            level={todo.attention}
+            reason={todo.attention_reason}
+            className="mt-2.5"
+          />
 
           {open ? (
             <div className="mt-3 rounded-md border border-border bg-muted/40 p-3.5">

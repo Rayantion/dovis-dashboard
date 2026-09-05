@@ -1,5 +1,6 @@
 "use client";
 
+import { AttentionGuide } from "@/components/attention";
 import { Header } from "@/components/chrome";
 import { Gate } from "@/components/gate";
 import { QueueList } from "@/components/queue";
@@ -60,22 +61,32 @@ function Briefing() {
         <MetricBand widgets={widgets} />
       </div>
 
-      <section className="mx-auto max-w-5xl px-5 py-8">
-        {/*
-          The refresh sits on the queue rather than in the header. The header was
-          already at 406px on a 375px screen before the nav labels were dropped to
-          make it fit, and another control would put it back over. Here it is
-          beside the data it refetches, and always on screen.
-        */}
-        <div className="mb-3 flex items-center gap-3">
-          <h2 className="font-heading text-sm uppercase tracking-wider text-muted-foreground">
-            {t.queue}
-          </h2>
-          <RefreshButton className="ml-auto" />
+      {/*
+        Queue and guide are one section on a two-column grid, so the guide costs
+        the queue no vertical space on a laptop — it sits beside it, not above
+        it. Below `lg` the grid collapses to one column and the guide lands under
+        the queue, in source order, which is also the order it should be read in.
+      */}
+      <section className="mx-auto max-w-5xl px-5 py-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_16rem] lg:items-start">
+        <div className="min-w-0">
+          {/*
+            The refresh sits on the queue rather than in the header. The header was
+            already at 406px on a 375px screen before the nav labels were dropped to
+            make it fit, and another control would put it back over. Here it is
+            beside the data it refetches, and always on screen.
+          */}
+          <div className="mb-3 flex items-center gap-3">
+            <h2 className="font-heading text-sm uppercase tracking-wider text-muted-foreground">
+              {t.queue}
+            </h2>
+            <RefreshButton className="ml-auto" />
+          </div>
+          <div className="paper rounded-lg overflow-hidden">
+            <QueueList todos={todos} />
+          </div>
         </div>
-        <div className="paper rounded-lg overflow-hidden">
-          <QueueList todos={todos} />
-        </div>
+
+        <AttentionGuide />
       </section>
 
       {cards.length > 0 ? (

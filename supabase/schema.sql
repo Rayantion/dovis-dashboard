@@ -55,6 +55,62 @@ comment on column public.todos.status is
   'runs cannot double-execute one row. A row still in executing long after a run '
   'finished is a crashed execution, and is visible precisely because it is real.';
 
+/*
+  Attention level, and why Dovis chose it.
+
+  For databases created before these columns existed. `create table if not
+  exists` above is a no-op on them, so the columns arrive separately — the
+  `profiles.lang` pattern, for the same reason: this file is re-run whole rather
+  than as a migration chain.
+
+  NULL is the important value and it is the default. It means nobody has judged
+  this row, which is NOT the same as judging it harmless — a row written by a box
+  that predates this column has no level, and the dashboard renders no block at
+  all for it. Defaulting it to the calmest level would invent a judgement nothing
+  made, on the one surface where the reader is being asked to trust a judgement.
+*/
+alter table public.todos
+  add column if not exists attention text;
+
+alter table public.todos
+  add column if not exists attention_reason text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'todos_attention_check'
+  ) then
+    alter table public.todos
+      add constraint todos_attention_check
+      check (attention in ('informational','attention','action_soon','urgent','critical'));
+  end if;
+end
+$$;
+
+comment on column public.todos.attention is
+  'How much of the principal''s attention this item is asking for. A closed set, '
+  'ours, so the dashboard translates by key lookup and a sender can never author '
+  'the words a boss reads. It is NOT derived from `priority`, which answers a '
+  'different question — the order to work through the queue in, not how much is '
+  'at stake — and a silent mapping between the two would file judgements the box '
+  'never made. NULL means not judged, and renders as nothing.';
+
+comment on column public.todos.attention_reason is
+  'One sentence naming the evidence behind the level: a deadline, a commitment, '
+  'an amount, a risk. Judge from those, never from how urgently the sender wrote '
+  '— a stranger able to set this column by typing URGENT is a stranger setting '
+  'the dashboard''s alarm. '
+  'Deliberately unconstrained: the string is written by an analyser reading '
+  'someone else''s mail, so a length CHECK here would let a sender make the '
+  'insert fail and erase the record of their own item. Stored verbatim, clamped '
+  'and escaped at render. '
+  'Note WHERE this lives: `todos` is REPLICA IDENTITY FULL and in the realtime '
+  'publication, so this text is broadcast in full to every subscribed active '
+  'account, read-only assistants included — the same exposure `title` already '
+  'has, and the reason it must stay a short judgement about urgency rather than '
+  'a summary of the message. Anything richer belongs on todo_payloads, behind '
+  'the can_modify gate that already governs draft bodies.';
+
 -- The contents. NEVER browser-readable. Reached only through a server route
 -- holding the service_role key, after a session check.
 create table if not exists public.todo_payloads (

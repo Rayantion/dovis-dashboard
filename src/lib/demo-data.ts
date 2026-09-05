@@ -11,6 +11,13 @@ import type {
   The content is written to show the product honestly: a queue of things Dovis
   PROPOSES, in a spread of states, including one failure. A demo where everything
   succeeds hides the part of the design that matters most.
+
+  The same applies to attention. All five levels appear, but so do the two cases
+  that are easy to build a demo without and then ship a bug in: an item with a
+  level and no reason, and items with no level at all. Notice also that attention
+  and `priority` disagree here — t11 is low priority and needs acting on this
+  week — because they answer different questions and a fixture where they always
+  match would make deriving one from the other look reasonable.
 */
 
 const now = Date.now();
@@ -27,6 +34,8 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(24),
     confirmed_at: null,
     completed_at: null,
+    attention: "urgent",
+    attention_reason: "Stanley has asked twice, and the board reviews these figures on Thursday.",
   },
   {
     id: "t2",
@@ -38,6 +47,8 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(51),
     confirmed_at: null,
     completed_at: null,
+    attention: "informational",
+    attention_reason: "Flagged high importance by the sender, but the clash is already resolved on your calendar.",
   },
   {
     id: "t3",
@@ -49,6 +60,8 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(88),
     confirmed_at: null,
     completed_at: null,
+    attention: "action_soon",
+    attention_reason: "Friday is three days out and the agent holds the slot only until you confirm.",
   },
   {
     id: "t4",
@@ -60,6 +73,8 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(140),
     confirmed_at: null,
     completed_at: null,
+    attention: "critical",
+    attention_reason: "Cover lapses if the signed copy misses the 5th, and nobody else can sign it.",
   },
   {
     id: "t5",
@@ -71,6 +86,10 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(190),
     confirmed_at: minutesAgo(4),
     completed_at: null,
+    // A level with no reason. The reason is optional in the schema and the block
+    // has to hold its shape without one, so one fixture is written without one.
+    attention: "informational",
+    attention_reason: null,
   },
   {
     id: "t6",
@@ -82,6 +101,10 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(320),
     confirmed_at: minutesAgo(240),
     completed_at: minutesAgo(238),
+    // Never judged, so no block renders — not the calmest block. This row and
+    // t10 are the absence case, which is the one a default would quietly break.
+    attention: null,
+    attention_reason: null,
   },
   {
     id: "t7",
@@ -93,6 +116,8 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(400),
     confirmed_at: null,
     completed_at: null,
+    attention: "attention",
+    attention_reason: "Wei-Ting has been waiting a fortnight for an answer either way.",
   },
   {
     id: "t8",
@@ -104,6 +129,8 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(505),
     confirmed_at: minutesAgo(470),
     completed_at: null,
+    attention: "urgent",
+    attention_reason: "The shipment is already late and no revised date has been given in writing.",
   },
   /*
     Manual items lifted out of mail. Their payloads below are the only way to see
@@ -120,6 +147,8 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(63),
     confirmed_at: null,
     completed_at: null,
+    attention: "attention",
+    attention_reason: "They cannot book the room until the count is in, and the deadline is the 11th.",
   },
   {
     id: "t10",
@@ -131,6 +160,11 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(118),
     confirmed_at: null,
     completed_at: null,
+    // The shape of a row written before the column existed, still waiting on a
+    // decision. It has a deadline and it is still not rated: whatever wrote it
+    // had no opinion to record, and the card must not supply one on its behalf.
+    attention: null,
+    attention_reason: null,
   },
   {
     id: "t11",
@@ -142,6 +176,8 @@ export const demoTodos: Todo[] = [
     created_at: minutesAgo(35),
     confirmed_at: null,
     completed_at: null,
+    attention: "action_soon",
+    attention_reason: "The quote expires at the end of the week.",
   },
 ];
 

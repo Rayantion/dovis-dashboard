@@ -65,6 +65,24 @@
   --color-status-rejected: var(--status-rejected);
   --color-status-failed: var(--status-failed);
 
+  /*
+    Attention levels. A judgement about how much of the reader this item is
+    asking for — a different axis from the status set above, which says where a
+    row is in its lifecycle.
+
+    A `-fg` exists only where a level is drawn as a FILLED chip and something has
+    to sit legibly on top of it. The two calm levels are drawn as an outline, so
+    their glyph takes the level colour itself and there is nothing to define.
+  */
+  --color-attention-informational: var(--attention-informational);
+  --color-attention-attention: var(--attention-attention);
+  --color-attention-action-soon: var(--attention-action-soon);
+  --color-attention-action-soon-fg: var(--attention-action-soon-fg);
+  --color-attention-urgent: var(--attention-urgent);
+  --color-attention-urgent-fg: var(--attention-urgent-fg);
+  --color-attention-critical: var(--attention-critical);
+  --color-attention-critical-fg: var(--attention-critical-fg);
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -110,6 +128,33 @@
   --status-done: oklch(0.62 0.008 160);
   --status-rejected: oklch(0.66 0.006 85);
   --status-failed: oklch(0.52 0.19 27);
+
+  /*
+    Attention levels on paper. Measured, not eyeballed — every number below is a
+    WCAG contrast ratio against this block's own values, with the tint composited
+    the way a browser does it (alpha over the card in gamma-encoded sRGB, not in
+    linear light, which reads about 4% optimistic).
+
+    Block surface is the level at 6%, and on it: --muted-foreground clears 5.4:1
+    everywhere and --foreground 14.4:1, so the words never depend on the colour.
+    Outlined glyphs (informational 5.0:1, attention 3.4:1) and filled chips
+    (action-soon 4.4:1, urgent 5.4:1, critical 10.1:1) all clear the 3:1 a
+    graphical object needs. Glyphs on a filled chip clear 4.7:1.
+
+    `attention` is a darker gold than a warning yellow usually is, and that is
+    forced rather than chosen: on warm paper a true yellow sits at about 2:1 and
+    a chip nobody can see is not a warning. The hue survives; the lightness could
+    not.
+  */
+  --attention-informational: oklch(0.52 0.13 250);
+  --attention-attention: oklch(0.62 0.12 82);
+  --attention-action-soon: oklch(0.56 0.14 52);
+  --attention-action-soon-fg: oklch(0.99 0.005 60);
+  /* Deliberately the same red as --destructive: both mean stop and read. */
+  --attention-urgent: oklch(0.52 0.19 27);
+  --attention-urgent-fg: oklch(0.99 0.005 27);
+  --attention-critical: oklch(0.36 0.12 20);
+  --attention-critical-fg: oklch(0.98 0.01 20);
 
   --chart-1: #0f3d3e;
   --chart-2: #c9a227;
@@ -165,6 +210,30 @@
   --status-done: oklch(0.58 0.012 190);
   --status-rejected: oklch(0.54 0.01 190);
   --status-failed: oklch(0.65 0.18 27);
+
+  /*
+    Attention levels on the ink-teal ground. Same five meanings, separately
+    authored values — every one is lighter than its paper counterpart, because
+    on a dark ground contrast runs the other way.
+
+    Critical is the case worth stating. A literal dark red — the 0.36 lightness
+    used on paper — sits at 1.4:1 against this card and is simply not there. So
+    critical here is the deepest red that still reads: 3.1:1 for the chip, which
+    clears the 3:1 a graphical object needs and no more, and it stays 1.6:1
+    darker than urgent so the two do not collapse into one another. Depth is
+    what distinguishes it, and depth is the thing a dark ground takes away.
+
+    Measured on this block's own card: muted text on the 6% tint clears 5.8:1 at
+    every level, glyphs on a filled chip 4.8:1, outlined glyphs 6.1:1.
+  */
+  --attention-informational: oklch(0.72 0.12 245);
+  --attention-attention: oklch(0.78 0.13 85);
+  --attention-action-soon: oklch(0.74 0.14 55);
+  --attention-action-soon-fg: oklch(0.2 0.03 55);
+  --attention-urgent: oklch(0.68 0.19 27);
+  --attention-urgent-fg: oklch(0.19 0.03 27);
+  --attention-critical: oklch(0.56 0.19 15);
+  --attention-critical-fg: oklch(0.98 0.01 15);
 
   --chart-1: oklch(0.82 0.075 175);
   --chart-2: #c9a227;

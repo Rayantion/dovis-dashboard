@@ -36,6 +36,76 @@ export type Role = "owner" | "admin";
 
 export type AccountStatus = "active" | "paused";
 
+/**
+ * How much of the principal's attention an item is asking for.
+ *
+ * A closed set, ours, matching the CHECK on `todos.attention`. The words a boss
+ * reads come from ATTENTION_LABELS in i18n.ts and are looked up by key, so a
+ * sender cannot author their own headline — the same containment the flag
+ * vocabulary in EMAIL-INTELLIGENCE-DESIGN.md relies on.
+ *
+ * Adding a sixth level means: the CHECK in schema.sql, this union, and
+ * ATTENTION_LABELS in BOTH languages. Miss any and the build or the insert
+ * fails, which is the intended failure.
+ *
+ * This is NOT `priority`. Priority answers "what order do I work through the
+ * queue in"; this answers "how much is at stake here". The two disagree
+ * constantly — a low-priority note about a lapsing insurance policy is
+ * critical — and deriving one from the other would file judgements nothing made.
+ */
+export type AttentionLevel =
+  | "informational"
+  | "attention"
+  | "action_soon"
+  | "urgent"
+  | "critical";
+
+/** Calmest first. Display order in the guide, and nothing else depends on it. */
+export const ATTENTION_LEVELS: AttentionLevel[] = [
+  "informational",
+  "attention",
+  "action_soon",
+  "urgent",
+  "critical",
+];
+
+/**
+ * Default-deny, because rows arrive from PostgREST untyped and through a blind
+ * `as` cast.
+ *
+ * Three things land here and all three must render as no block: null from a row
+ * nothing has judged, undefined from a database where this file has not been
+ * re-run, and a string outside the union. An unrecognised level has no
+ * dictionary entry and would otherwise paint a coloured block with no name — a
+ * warning that cannot say what it is warning about.
+ */
+export function isAttentionLevel(value: unknown): value is AttentionLevel {
+  return (
+    typeof value === "string" &&
+    (ATTENTION_LEVELS as string[]).includes(value)
+  );
+}
+
+/**
+ * The reason is written by an analyser reading somebody else's mail, so it is
+ * untrusted on the way in and bounded on the way out — the `MAX_KEY_CHARS`
+ * argument in queue.tsx, applied to a field that is prose rather than a key.
+ *
+ * The clamp is a layout defence: a 4,000-character reason on a 375px screen
+ * pushes Confirm, Modify and Reject off the card, which is a denial of service
+ * delivered by email. Escaping is React's job and the render path adds no
+ * markup, no linkification and no HTML.
+ */
+const MAX_REASON_CHARS = 180;
+
+export function clampAttentionReason(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const text = raw.trim();
+  return text.length <= MAX_REASON_CHARS
+    ? text
+    : `${text.slice(0, MAX_REASON_CHARS)}…`;
+}
+
 export interface Todo {
   id: string;
   title: string;
@@ -46,6 +116,14 @@ export interface Todo {
   created_at: string;
   confirmed_at: string | null;
   completed_at: string | null;
+  /**
+   * Null when nothing has judged this item — an older row, or one the box chose
+   * not to rate. It renders as no block, never as the calmest level: absence of
+   * a judgement is not a judgement that everything is fine.
+   */
+  attention: AttentionLevel | null;
+  /** Optional even when a level is present. Untrusted; see clampAttentionReason. */
+  attention_reason: string | null;
 }
 
 /**
