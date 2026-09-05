@@ -1,7 +1,8 @@
 # Email intelligence — design
 
-**Status: designed, not built.** Specified by Aaron 2026-09-05, the same day he
-settled the assistant permission decisions this design leans on. It adds three
+**Status: designed, not built.** Specified by the deployment owner 2026-09-05,
+the same day they settled the assistant permission decisions this design leans
+on. It adds three
 things to an action card derived from email: structured flags about the message,
 the attachments that came with it, and the links inside it. It adds no action
 type, changes neither `draft_email` nor `manual`, and leaves the owner/assistant
@@ -92,7 +93,7 @@ renders fixtures and never touches a network.
 
 ---
 
-## Aaron's decisions, and what they settle here
+## The deployment owner's decisions, and what they settle here
 
 Recorded 2026-09-05, binding, and each one closes a question this design would
 otherwise have to open.
@@ -111,8 +112,8 @@ below reuses it rather than inventing a second gate.
 is never trusted.**
 
 One premise in the brief is wrong and it changes code, so it is corrected here
-rather than quietly worked around. Aaron wrote *"existing dark Dovis visual
-style"*. The product is not dark-only. `globals.css` defines the complete
+rather than quietly worked around. The deployment owner wrote *"existing dark
+Dovis visual style"*. The product is not dark-only. `globals.css` defines the complete
 palette on bare `:root` — warm paper `#f7f5f2` with ink-teal type — and `.dark`
 as a separately authored block whose own comment reads *"Dark is a real palette,
 not an inversion."* `theme-provider.tsx` sets `defaultTheme="system"`, so the
@@ -135,7 +136,7 @@ from convenience.
 publication — because it holds *the owner's mail rewritten in the owner's voice*.
 `todos` is open to every active account because a title derived from a subject
 line is a category of thing the product already streams. Those two precedents
-sort every field Aaron listed.
+sort every field the deployment owner listed.
 
 | Tier | What | Gate | Precedent |
 |---|---|---|---|
@@ -159,7 +160,7 @@ discloses strictly less than `todos.title` — *"Reply to Stanley Chen about the
 budget shortfall"* — which a read-only assistant already reads. That is true of
 one code and false of a set: `payment_or_invoice_request` plus
 `sensitive_info_request` plus a filename on an item titled with a person's name
-is a summary of mail Aaron just decided assistants may not read.
+is a summary of mail the deployment owner just decided assistants may not read.
 
 The reason this costs nothing is the shape of the card. The collapsed caution
 chip exists because Confirm renders on a collapsed row — `queue.tsx` gates the
@@ -178,8 +179,8 @@ the matching argument, that a draft is *"the owner's mail rewritten in the
 owner's voice."* An attachment is not a derivative of mail; it **is** mail,
 byte-for-byte and unsummarised: a signed contract, a bank statement, a medical
 scan, a passport photograph the owner never chose to route through Dovis. Serving
-one over HTTP reinstates through a different door exactly the capability Aaron
-removed from the Hermes toolset hours earlier.
+one over HTTP reinstates through a different door exactly the capability the
+deployment owner removed from the Hermes toolset hours earlier.
 
 A `can_modify` assistant therefore sees that an attachment exists, its name, its
 size and its type, and cannot open it. The UI says so in words, because a
@@ -211,8 +212,9 @@ keeping the old one.
 --
 -- READS are gated on dovis_can_modify(), the same switch that governs draft
 -- bodies through /api/payload/[id]. A read-only assistant sees no analysis at
--- all, which is Aaron's 2026-09-05 decision applied consistently: they have no
--- mailbox access, and a set of flags on a titled item is a summary of mail.
+-- all, which is the deployment owner's 2026-09-05 decision applied
+-- consistently: they have no mailbox access, and a set of flags on a titled
+-- item is a summary of mail.
 --
 -- NOTHING IS ADDED TO `todos`: it is REPLICA IDENTITY FULL and in the realtime
 -- publication, so every column on it is broadcast in full to every subscribed
@@ -268,12 +270,13 @@ comment on column public.todo_email_analysis.state is
 
 comment on column public.todo_email_analysis.links is
   'Array of {url, label, safety}. `url` is the most attacker-controlled string '
-  'in this schema and is stored in full, because Aaron requires the reader be '
-  'able to inspect it. Rendering it as TEXT is safe; rendering it as an href is '
-  'the gated act, and that gate lives in linkTarget() in types.ts. No hostname '
-  'is stored: it is parsed from `url` in the browser, so a stored host can '
-  'never disagree with the URL that becomes the href — and the host is the half '
-  'the reader is being asked to trust.';
+  'in this schema and is stored in full, because the deployment owner '
+  'requires the reader be able to inspect it. Rendering it as TEXT is safe; '
+  'rendering it as an href is the gated act, and that gate lives in '
+  'linkTarget() in types.ts. No hostname is stored: it is parsed from `url` '
+  'in the browser, so a stored host can never disagree with the URL that '
+  'becomes the href — and the host is the half the reader is being asked to '
+  'trust.';
 
 
 -- ------------------------------------------------------------------ 7.2 flags
@@ -712,8 +715,9 @@ export interface TodoAttachment {
 /**
  * Both routes require a session AND `profile.role === "owner"` — stricter than
  * the can_modify gate that governs this row's metadata. An attachment is the
- * third party's original document, not the owner's mail rewritten, and Aaron's
- * 2026-09-05 decision removes mailbox access from assistants entirely.
+ * third party's original document, not the owner's mail rewritten, and the
+ * deployment owner's 2026-09-05 decision removes mailbox access from
+ * assistants entirely.
  *
  * These return a path, not a permission. The component asks `canOpen` first.
  */
@@ -743,8 +747,9 @@ const CLICKABLE_PROTOCOLS = new Set(["https:"]);
 /**
  * The second gate, and the reason EmailLink carries no `href` field: a component
  * cannot render a link without calling this, because there is nothing else to
- * put in the attribute. Aaron's "clickable ONLY after safe-URL validation",
- * expressed as a type rather than as a rule someone has to remember.
+ * put in the attribute. The deployment owner's "clickable ONLY after safe-URL
+ * validation", expressed as a type rather than as a rule someone has to
+ * remember.
  *
  * Returns null — meaning "render as inert text" — unless the stored verdict is
  * `safe`, the URL parses, the scheme is https, and the authority carries no
@@ -874,8 +879,9 @@ render.
 
 ## Untrusted content, made mechanical
 
-Aaron's rule is that email content is data and never instruction. That rule is
-worth nothing as a sentence, so here is every place it becomes a mechanism.
+The deployment owner's rule is that email content is data and never
+instruction. That rule is worth nothing as a sentence, so here is every place
+it becomes a mechanism.
 
 **There are three consumers of attacker bytes, and they need different
 containment.** The model reading the mail is contained by the toolset allowlist,
@@ -978,7 +984,8 @@ that plus SSRF against the box's own network — `http://169.254.169.254/`,
 `http://localhost:…` — from a process sitting next to the OAuth credentials
 directory. There is no link preview, no unfurl, no prefetch, no preconnect. The
 only image on this surface is a same-origin re-encode served by our own
-authenticated route, which is why it is not the auto-open Aaron forbade.
+authenticated route, which is why it is not the auto-open the deployment owner
+forbade.
 
 **8. The dictionary is a second compile-time gate.** `i18n.ts` already carries
 `export const languages: Record<Lang, Dict> = dict` to fail the build when one
@@ -1008,8 +1015,8 @@ Inferred — a model read text a stranger wrote — hedges, every time.
 *"Possible…" "…looks…" "May…" "Mentions…"* Coloured chip, an icon, and a
 disclosure carrying the citation.
 
-That is why four of Aaron's sixteen labels are reworded, and each rewording is
-a claim the box cannot actually support.
+That is why four of the deployment owner's sixteen labels are reworded, and
+each rewording is a claim the box cannot actually support.
 
 *"Suspicious sender"* is a verdict on a person that cannot cite evidence,
 because it **is** the thing evidence would support. It becomes *"Sender looks
@@ -1097,10 +1104,10 @@ import { createAdmin, isFailure, requireProfile } from "@/lib/supabase/server";
  *
  * OWNER ONLY — deliberately stricter than /api/payload/[id]'s can_modify gate.
  * A draft is the owner's mail rewritten in the owner's voice; an attachment is
- * the third party's original document, and Aaron's 2026-09-05 decision removed
- * mailbox access from assistants entirely. Serving one here would reinstate that
- * capability through a different door and leave the permission model saying two
- * different things.
+ * the third party's original document, and the deployment owner's 2026-09-05
+ * decision removed mailbox access from assistants entirely. Serving one here
+ * would reinstate that capability through a different door and leave the
+ * permission model saying two different things.
  *
  * `id` is a UUID from OUR table. The URL carries no Gmail identifier, no token,
  * no path, no MIME type, no filename and no signature. Everything is resolved
@@ -1287,10 +1294,10 @@ hands the file to the browser's PDF viewer — a large parser with a long CVE
 history — inside a document context that is same-origin with the dashboard,
 next to the session cookie. The Preview button is a user gesture calling
 `window.open()`, and the per-response `sandbox` puts that document in an opaque
-origin. Same UI state Aaron asked for, a fraction of the risk, no new dependency.
-If a genuine in-page preview is ever wanted, the safe version is to render page
-one to a PNG server-side at ingest and serve it through the thumbnail path —
-never to ship the raw PDF into a frame.
+origin. Same UI state the deployment owner asked for, a fraction of the risk,
+no new dependency. If a genuine in-page preview is ever wanted, the safe
+version is to render page one to a PNG server-side at ingest and serve it
+through the thumbnail path — never to ship the raw PDF into a frame.
 
 **The thumbnail is not the attachment.** At ingest the box decodes the image in a
 bounded process, rejects anything past a pixel-count ceiling, re-encodes to a
@@ -1314,8 +1321,9 @@ session per minute.
 
 ## Links
 
-Aaron's spec says *"show title or hostname"*. It must not be *or*. The title is
-whatever the sender typed — `<a href="https://evil.tld">Your DocuSign document</a>`
+The deployment owner's spec says *"show title or hostname"*. It must not be
+*or*. The title is whatever the sender typed —
+`<a href="https://evil.tld">Your DocuSign document</a>`
 — so the title **is** the attack. The hostname is the only string on screen that
 determines where a tap lands.
 
@@ -1658,9 +1666,9 @@ if (actionType === "manual") {
 Anything nested inside is therefore invisible on every `manual` item — including
 `demo-data.ts` t4, *"Sign the renewed insurance policy — it needs your wet
 signature"*, which is `manual`, `source: "email"`, and close to the canonical
-case for this feature: a signature request with a PDF attached. Aaron's *"stay
-compatible with the existing `draft_email` and `manual` action types"* is exactly
-the requirement that would be dropped.
+case for this feature: a signature request with a PDF attached. The deployment
+owner's *"stay compatible with the existing `draft_email` and `manual` action
+types"* is exactly the requirement that would be dropped.
 
 **The existing denied-versus-failed branch must be preserved verbatim.**
 `queue.tsx` carries a comment explaining why it exists — *"Could not load told a
@@ -1673,8 +1681,8 @@ and whose body is the composed evidence sentence. Observed flags render as a
 wrapped **chip cloud**, each carrying its short fact inline as a muted suffix —
 *"PDF attachment · quarterly-review.pdf, 240 KB"*. Uniform padding everywhere
 would be the template look; this is the hierarchy doing work, and it is why an
-observed flag needs no disclosure while still satisfying Aaron's *"show a short
-reason"*.
+observed flag needs no disclosure while still satisfying the deployment owner's
+*"show a short reason"*.
 
 **Observed flags never get a disclosure, and that is a contract with the box.**
 An empty `<details>` that opens onto *"no reason recorded"* teaches the reader
@@ -1700,13 +1708,14 @@ Two taps maximum: expand card, expand flag.
 
 Attachment rows never disappear. An attachment the box could not fetch is
 information — Dovis saw one and could not get it — and hiding the failure would
-silently rewrite what the message contained. The six states Aaron listed map
-onto one row shape: the image thumbnail (a 40px fixed tile so rows do not jitter
-as thumbnails resolve), the PDF preview button, the generic file tile, open/view,
-download, and unavailable — the row at `opacity-60` with a `FileX` in
-`text-destructive`, both buttons removed, and `attachmentUnavailable` beneath the
-metadata. A seventh state exists for a `can_modify` assistant: both buttons
-absent, `attachmentOwnerOnly` in their place.
+silently rewrite what the message contained. The six states the deployment
+owner listed map onto one row shape: the image thumbnail (a 40px fixed tile so
+rows do not jitter as thumbnails resolve), the PDF preview button, the generic
+file tile, open/view, download, and unavailable — the row at `opacity-60` with
+a `FileX` in `text-destructive`, both buttons removed, and
+`attachmentUnavailable` beneath the metadata. A seventh state exists for a
+`can_modify` assistant: both buttons absent, `attachmentOwnerOnly` in their
+place.
 
 One build note that will otherwise cost an afternoon. `src/components/ui/button.tsx`
 wraps `@base-ui/react`, **not Radix**, and Base UI has no `asChild` — its
@@ -1894,7 +1903,7 @@ disk. The costs are honest — latency on every open, and an attachment that
 `unavailable`s once the boss deletes the mail — and the benefit is that Dovis
 never becomes a second archive of every invoice, contract and scan the boss has
 ever received. That is a retention decision before it is a technical one, and it
-is recorded below as Aaron's.
+is recorded below as the deployment owner's.
 
 ---
 
@@ -2027,7 +2036,7 @@ replicated it.
 
 ---
 
-## Open questions — Aaron's calls
+## Open questions — the deployment owner's calls
 
 1. **Does the box's Gmail tool return raw headers?** `Reply-To`,
    `List-Unsubscribe`, `Precedence`, `Auto-Submitted`, and

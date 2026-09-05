@@ -91,7 +91,7 @@ has API routes and already holds `service_role`, so it can. Hence:
 
 ## Assistant chat — decided 2026-09-03
 
-Aaron: *"Yes assistant can use the chat, but externally, so yeah they can't
+The deployment owner: *"Yes assistant can use the chat, but externally, so yeah they can't
 modify anything."* Assistants get the chat. The constraint is that nothing they
 say can cause Dovis to act.
 
@@ -130,7 +130,7 @@ server-side from the session; a body field like `{"role":"assistant"}` is not
 evidence of anything.
 
 Within that, an assistant's chat is a **real conversation, not a restricted
-query box** (Aaron: *"not only read only, they able to use it to ask some
+query box** (the client: *"not only read only, they able to use it to ask some
 things"*). They can ask Dovis for help the way the owner does. What they cannot
 do is cause anything to happen.
 
@@ -165,7 +165,7 @@ decision to make rather than one to inherit.
 
 ## Conversation model — decided 2026-09-03
 
-Aaron asked for "one thread", and for it to work "like Gemini web or app". Those
+The deployment owner asked for "one thread", and for it to work "like Gemini web or app". Those
 are the same requirement once stated precisely, and it is **not** one endless
 transcript. Gemini keeps *many named conversations in a list, synced across every
 device* — opening it on a phone or the web shows the same list, and any of them
@@ -247,7 +247,7 @@ RLS from day one, not added later. A conversation belongs to one principal, and
 an assistant account must never read the owner's thread — the whole point of the
 queue is that the owner sees things the assistant does not.
 
-Visibility is **asymmetric**, per Aaron 2026-09-03: an assistant sees only their
+Visibility is **asymmetric**, per the deployment owner 2026-09-03: an assistant sees only their
 own conversations; the owner sees everyone's, theirs and every assistant's.
 
 Use the helper the schema already has. `supabase/schema.sql:157` defines
@@ -321,7 +321,7 @@ on mobile and desktop:
 | `ChatHistorySheet.tsx` | Port; back it with `messages` instead of IndexedDB. |
 | `lib/chat.ts` | Rewrite. This is the transport, and the transport changes. |
 
-Behaviour agreed with Aaron:
+Behaviour agreed with the deployment owner:
 
 - A floating **bubble** on the dashboard, and a dedicated **Assistant page**.
 - The bubble **hides on the Assistant page** and returns elsewhere — it should
@@ -360,8 +360,8 @@ as noise. Left as a refinement, not a requirement.
 
 ### Search
 
-Clarified by Aaron 2026-09-03: the debounce is for **chat search** — finding
-things he said in earlier conversations. So search runs over **message content**,
+Clarified by the deployment owner 2026-09-03: the debounce is for **chat search** — finding
+things they said in earlier conversations. So search runs over **message content**,
 not only conversation titles; "what did I say about the insurance renewal" is the
 actual question being asked.
 
@@ -405,7 +405,7 @@ tokens, not the markup; implementation comes from the shadcn registries.
 
 ## Out of scope, recorded so it is not re-litigated
 
-- **STT / TTS runs through Hermes**, configured on the box (Aaron, 2026-09-03).
+- **STT / TTS runs through Hermes**, configured on the box (the deployment owner, 2026-09-03).
   Not a dashboard concern. Config shapes are now known rather than guessed:
   `stt.provider` with `groq` (`whisper-large-v3-turbo`) or `openai`
   (`whisper-1`, a separate paid credential), and `tts.provider: edge`. Hermes
@@ -416,7 +416,7 @@ tokens, not the markup; implementation comes from the shadcn registries.
 - **A ChatGPT subscription grants no API access.** This has now blocked two
   designs (the chat model, then STT). Treat it as standing: anything needing a
   programmatic OpenAI call is a second bill and a second secret.
-- **Default language is set by Hermes** (Aaron, 2026-09-03), not chosen in the
+- **Default language is set by Hermes** (the deployment owner, 2026-09-03), not chosen in the
   dashboard. The existing EN / zh-TW toggle stays a per-viewer override.
 
 ## Open questions — answer before building
@@ -447,7 +447,7 @@ Discovered 2026-09-03 from Hermes' integration answers, then verified directly:
 | a private per-client repo | that client's own deployment | `demo:false, supabase:true, serviceRole:true` |
 
 **This repo is upstream.** Work lands here, and Hermes pulls it into the private
-client repo and adapts it there (Aaron, 2026-09-03). So committing to the
+client repo and adapts it there (the deployment owner, 2026-09-03). So committing to the
 template is correct, not a misfire — but it means a change is not *in service*
 when it is pushed here. It is in service when Hermes has replicated it and
 Vercel has redeployed the private project.
@@ -491,7 +491,7 @@ install — not in the template every other client also reads.
 
 ## Catch me up
 
-**Status: designed, not built. Blocked on the chat above.** Aaron asked for this
+**Status: designed, not built. Blocked on the chat above.** The deployment owner asked for this
 2026-09-03 and settled every one of its twelve original open questions across
 three rounds on 2026-09-05, the last of those rounds closing the two the earlier
 rounds had left open. Those answers are folded into the body below rather than
@@ -710,7 +710,7 @@ reply.
 **`blind_since` is a third value of a different kind, and holding it apart from
 the two marks is what makes it safe.** The marks say how far a recap has been
 shown to have covered. `blind_since` says how long a source has been unreadable,
-which is the input to the escalation Aaron decided on 2026-09-05 and which is
+which is the input to the escalation the deployment owner decided on 2026-09-05 and which is
 argued out under partial visibility below. It is written on exactly the runs where
 the marks deliberately do **not** move, so the two live on different branches
 rather than in one statement — and that separation carries weight, because the
@@ -810,8 +810,8 @@ single route, and it is the one below.
 
 **The earlier draft recommended that Hermes stamp the mark in the same
 service-role write that inserts the reply, and called the dashboard-side route a
-measurably weaker fallback. That recommendation is reversed.** Aaron's
-instruction is that the authenticated dashboard server writes it. The reasoning
+measurably weaker fallback. That recommendation is reversed.** The deployment
+owner's instruction is that the authenticated dashboard server writes it. The reasoning
 below is rewritten rather than annotated, because the old reasoning reached a
 conclusion this document no longer holds.
 
@@ -909,8 +909,8 @@ update public.profiles
 
 One statement, so the two marks can never disagree about whether a run happened.
 The third assignment is a seed rather than a mark — it fills an empty column and
-can never overwrite a zone the owner set, which is the direction Aaron's timezone
-decision requires and the *opposite* of the direction an earlier draft wrote it
+can never overwrite a zone the owner set, which is the direction the deployment
+owner's timezone decision requires and the *opposite* of the direction an earlier draft wrote it
 in; that flip is argued in the timezone section below. It is included only when
 the caller is the owner, because only the owner's account has a calendar for a
 run to have read. The fourth clears the darkness record for every source this run
@@ -1036,7 +1036,7 @@ them; the echo is what the confirmation route reads back.
 
 #### The result envelope is this side's contract — revised 2026-09-05
 
-**An earlier draft of this section rested on Aaron's decision that the reply
+**An earlier draft of this section rested on the deployment owner's decision that the reply
 carries an explicit result, and quietly treated that as something the transport
 provides. Hermes' answer of 2026-09-05 is that it does not.** The webhook response
 must not be assumed to be a machine-readable envelope at all. **The recap server
@@ -1044,10 +1044,10 @@ defines and validates its own structured result — `success | empty | partial |
 error` — including partial visibility such as "Gmail unavailable but Calendar
 available."**
 
-**The enum is four values, and `partial` is one of the four because Aaron named
-it.** It is not a state inferred from a `success` whose coverage came back short,
-and writing it as a three-value enum plus a derived case would lose the thing he
-asked for: a reply is allowed to say outright that it went partly blind. The
+**The enum is four values, and `partial` is one of the four because the deployment
+owner named it.** It is not a state inferred from a `success` whose coverage came
+back short, and writing it as a three-value enum plus a derived case would lose
+the thing they asked for: a reply is allowed to say outright that it went partly blind. The
 dashboard does not depend on it saying so — coverage still decides, and a
 `success` with a short coverage map is a `partial` verdict regardless — but a box
 that volunteers the bad news must have a literal to volunteer it in.
@@ -1340,10 +1340,10 @@ floor problem.
 
 **Escalation, decided 2026-09-05.** The same daily `recap.partial` line for a
 credential that died last Tuesday is a warning the boss has already learned to
-scroll past, and Aaron closed that with a two-part instruction: after 24 hours,
+scroll past, and the deployment owner closed that with a two-part instruction: after 24 hours,
 show a persistent and stronger warning naming the time — *"Email access has been
 unavailable since [time]. This recap may be incomplete."* — and escalate visually
-after repeated failures. His instruction ends with the sentence that governs the
+after repeated failures. That instruction ends with the sentence that governs the
 whole of it: **never advance `last_seen_at` past unread or unavailable email
 data.** Everything below is a change of *volume*, and nothing below is a change of
 *floor*.
@@ -1377,7 +1377,7 @@ own line beneath `partialSince` once **three or more consecutive confirmed runs
 have reported the same source short**, and the Google card's warning takes the
 destructive treatment the Danger zone already uses — same tokens, not a new
 colour — and gains `googleBlindStale` once `blind_since` is **72 hours or more**
-old. This is the visual escalation Aaron asked for, and it is the last one: there
+old. This is the visual escalation the deployment owner asked for, and it is the last one: there
 is no level four, because a warning that keeps growing teaches the reader that the
 current size is never the real size. The floor still does not move, and it must
 not be made to: a design that resolved a loud warning by advancing the mark would
@@ -1548,7 +1548,7 @@ grep the schema for the helper before writing a policy that needs one.
 ### The window: seven days back, seven days forward — decided 2026-09-05
 
 **The first-ever recap covers the last 7 days, and every recap looks 7 days
-forward for meetings.** Aaron settled both halves together, which is right,
+forward for meetings.** The deployment owner settled both halves together, which is right,
 because they were always the same product-visible span pointing in opposite
 directions.
 
@@ -1620,8 +1620,8 @@ Anything else is inference, and the inference was wrong here.
 reply, not as a tier the route resolves.** The dashboard cannot ask a calendar
 anything: it has no Google client, and the box is *told* the zone rather than
 asked for it. So there is no live calendar lookup in `/api/recap`, and
-`profiles.timezone` is the authority rather than a fallback. Aaron's decision of
-2026-09-05 in full: `profiles.timezone` is **owner-controlled** — populated from
+`profiles.timezone` is the authority rather than a fallback. The deployment
+owner's decision of 2026-09-05 in full: `profiles.timezone` is **owner-controlled** — populated from
 the owner's calendar timezone, once, when a completed owner recap reports one,
 and otherwise set explicitly by the owner in account settings. **Never set by an
 assistant, and never by email content.**
@@ -1704,7 +1704,7 @@ POST /api/account/timezone
 string, then `createAdmin().from("profiles").update({ timezone }).eq("id", target)`.
 **An assistant is refused, unconditionally** — not because an assistant's own zone
 would be dangerous, but because the column is one of the values a recap renders
-times in, and Aaron's decision puts the whole column under the owner.
+times in, and the client's decision puts the whole column under the owner.
 
 It is a **new route rather than a field on `/api/team/update`**, and the reason is
 that route's own guarantee. `/api/team/update` refuses outright to touch a row
@@ -1715,7 +1715,7 @@ invariant is worth more than the file it would save.
 
 ### The Hermes route, and why the recap wants its own — closed 2026-09-05
 
-Aaron's constraint is that read-only must be structural — role, auth and tool
+The deployment owner's constraint is that read-only must be structural — role, auth and tool
 restrictions, not a prompt. That rules out running the recap on `owner-chat`,
 because `owner-chat` is bound to `hermes-telegram`, which Hermes describes as the
 *"full normal core toolset, including filesystem/terminal/memory/etc."* A recap
@@ -1747,7 +1747,7 @@ created to reach, and it would fail in the quiet way — a route that authentica
 runs, answers, and reports `coverage: {mail: "unavailable"}` for ever. The
 restriction that belongs here is tool-level, not MCP-level.
 
-This is still **a change to Aaron's box, not something the dashboard does**: a
+This is still **a change to the client's box, not something the dashboard does**: a
 config edit, a third secret to store and rotate, a `HERMES_RECAP_SECRET` in
 `.env.example` and in Vercel. It is grouped with the other Hermes asks at the
 foot.
@@ -1761,7 +1761,7 @@ run should not have. The composed route takes the reads and leaves both.
 adversary, because there is no escalation to defend against: the same owner
 reaches the full toolset by typing anything else into the same chat window, and
 Dovis reads the same mailbox on Telegram today. What it buys is that the *recap
-run itself* structurally cannot act — which is exactly what Aaron asked for, and
+run itself* structurally cannot act — which is exactly what the deployment owner asked for, and
 which no prompt can deliver.
 
 And the fallback that used to hang off this question — *if no read-only
@@ -1772,7 +1772,7 @@ shipping a smaller feature.
 
 ### What an assistant's recap can contain — decided 2026-09-05
 
-**Assistants get no Gmail and no Calendar.** Aaron's instruction is that assistant
+**Assistants get no Gmail and no Calendar.** The deployment owner's instruction is that assistant
 chat runs on a fixed restricted route with no Gmail, no Calendar, no write tools,
 no memory, no terminal and no MCP — `hermes-webhook` under the `no_mcp`
 restriction, which is the `assistant-chat` route the parent document already
@@ -1802,7 +1802,7 @@ recap-route section above rejects `hermes-webhook` for the *owner's* recap partl
 on that ground, and an assistant's recap is a summarising run over externally
 influenced text too, since queue titles are derived from the principal's email, as
 `schema.sql` says in as many words. It is accepted here for two reasons, and
-neither is that the capability is absent: Aaron's instruction binds assistant
+neither is that the capability is absent: the deployment owner's instruction binds assistant
 chat to this route, and an assistant already reaches exactly this toolset through
 their ordinary chat, so the recap turn adds no reach they did not have a sentence
 earlier.
@@ -1818,7 +1818,7 @@ report about them.
 
 **And that assembly is now permission-bearing, because `/api/payload/[id]`
 changed on 2026-09-05.** What was an open question — is that route intentionally
-role-blind? — has been answered by the code rather than by Aaron: it now requires
+role-blind? — has been answered by the code rather than by the deployment owner: it now requires
 `permissionsFor(auth.profile).canModify` before returning a payload, with tests
 in `tests/payload-route.test.ts` pinning the decision. An assistant without
 `can_modify` can see that a queue item exists and read its title, and cannot read
@@ -1853,7 +1853,7 @@ send because the capability is not there.
 
 **It is not a new exposure.** The owner's ordinary chat already reads the
 mailbox on the full toolset, and so does Telegram. A read-only recap route bounds
-the recap turn and nothing wider. It is worth having because Aaron asked for that
+the recap turn and nothing wider. It is worth having because the deployment owner asked for that
 one turn to be structurally incapable of acting — not because it closes a door
 that is otherwise open.
 
@@ -2001,7 +2001,7 @@ unfalsifiable, and every finished conversation ends with a `dovis` row, so
 without the role test the predicate matches nothing or everything.
 
 **The owner's recap does not include assistants' unfinished conversations.**
-Aaron's answer is no. RLS would permit it — the owner can read every assistant's
+The deployment owner's answer is no. RLS would permit it — the owner can read every assistant's
 conversations — so this is a deliberate narrowing in the query rather than
 something the database prevents: `author_id = <the caller>` on every account, the
 owner's included. The parent document's own reasoning is why. An assistant is
@@ -2053,8 +2053,8 @@ confirms it instead.
 sentences the dashboard is entitled to say.** An earlier draft recommended against
 a client-rendered empty state, on the grounds that "nothing changed since your
 last review" is a claim only a run that actually looked can make, and the
-dashboard could not tell *looked and found nothing* from *never looked*. **Aaron
-answered that on 2026-09-05: support the empty state, and distinguish the two.**
+dashboard could not tell *looked and found nothing* from *never looked*. **The
+deployment owner answered that on 2026-09-05: support the empty state, and distinguish the two.**
 The envelope is what makes it honest rather than a guess — `result === "empty"`
 on a verdict of `advance` is a run reporting that it looked at everything it was
 asked to look at, so `recap.nothingNew` restates something the run said instead
@@ -2291,8 +2291,8 @@ get Chinese headings around English prose. The three dashboard-rendered outcomes
 `empty`, `partial` and `error` — escape this entirely, because they are dictionary
 strings rather than model output; only `success` carries the risk.
 
-**Decided 2026-09-05: `/api/recap` sends the language as a prompt hint.** Aaron's
-words: the server must derive the language from the authenticated dashboard
+**Decided 2026-09-05: `/api/recap` sends the language as a prompt hint.** The deployment
+owner's words: the server must derive the language from the authenticated dashboard
 preference, not trust arbitrary request data, and the structured response envelope
 stays language-independent and must still be validated as `success | empty |
 partial | error`. The hint selects a prompt, not a toolset, so the route binding
@@ -2313,18 +2313,19 @@ derive from.** Language lives entirely in the browser. `LANG_STORAGE_KEY` is
 and writes it back in `setLang`. Nothing sends it anywhere. And `profiles` has no
 `lang` column: its columns are `id`, `email`, `username`, `display_name`, `role`,
 `status`, `can_modify`, `must_change_password`, `created_at` and
-`last_sign_in_at`. **So the server cannot today derive what Aaron asked it to
-derive**, and this has to be said before anything is built rather than discovered
+`last_sign_in_at`. **So the server cannot today derive what the deployment owner
+asked it to derive**, and this has to be said before anything is built rather than discovered
 by an implementer reaching for a column that is not there.
 
-**Recommendation: add `profiles.lang`, on exactly the pattern Aaron chose for the
-timezone the same day.** A server route under `service_role` after
+**Recommendation: add `profiles.lang`, on exactly the pattern the deployment
+owner chose for the timezone the same day.** A server route under `service_role` after
 `requireProfile()`, seeded from the browser toggle the first time an authenticated
 viewer sets one, and thereafter the source of truth that `/api/recap` reads:
 
 ```sql
--- PENDING AARON'S DECISION. Not part of the migration list at the foot until he
--- says so; recorded here so the shape is not invented later under time pressure.
+-- PENDING THE DEPLOYMENT OWNER'S DECISION. Not part of the migration list at the
+-- foot until they say so; recorded here so the shape is not invented later under
+-- time pressure.
 alter table public.profiles
   add column if not exists lang text
   check (lang in ('en','zh-TW'));
@@ -2348,8 +2349,8 @@ a worse product for no security gain. So the language route accepts a self-write
 from any active profile and an owner write against any row, and it is the one
 place in this design where those two differ.
 
-**The incidental benefit, stated honestly because it is not what Aaron asked
-for.** Today a boss's language does not follow him between devices. It is one
+**The incidental benefit, stated honestly because it is not what the deployment
+owner asked for.** Today a boss's language does not follow him between devices. It is one
 browser's `localStorage` key, so the same account opened on his phone comes up in
 English and he sets it again. A column fixes that, and that is a real improvement
 — but it is an improvement arriving on the back of a prompt hint, which is
@@ -2376,21 +2377,21 @@ language on its own screen. It is the same reasoning that already accepts the
 browser's zone as the last tier of the timezone ladder: a display preference is
 safe to take from a client in a way a timestamp is not.
 
-**AARON'S DECISION, still pending.** It is his because it widens what he asked
-for: he asked for a prompt hint and the honest way to give him one is a schema
-change, a route, and a toggle that talks to the server. It also edits a line
+**THE DEPLOYMENT OWNER'S DECISION, still pending.** It is theirs because it widens
+what they asked for: they asked for a prompt hint and the honest way to give them
+one is a schema change, a route, and a toggle that talks to the server. It also edits a line
 already in this document's out-of-scope list — *"Default language is set by
 Hermes, not chosen in the dashboard. The existing EN / zh-TW toggle stays a
 per-viewer override"* — and a per-viewer override that persists per account is no
 longer only a per-viewer override. **Recommendation is the column**, because
-"derive from the authenticated preference" is what he actually said and the
-validated enum is a knowing second-best. Until he chooses, `/api/recap` resolves
+"derive from the authenticated preference" is what they actually said and the
+validated enum is a knowing second-best. Until they choose, `/api/recap` resolves
 the hint the way the timezone resolves: `profiles.lang` if the column exists and
 is set, otherwise the validated enum from the request, otherwise `en`.
 
 ### Accessibility
 
-Explicit in Aaron's ask. The repo already sets every pattern needed, so this is
+Explicit in the deployment owner's ask. The repo already sets every pattern needed, so this is
 matching, not inventing.
 
 **The tail of the thread is a live region, it is only the tail, and it is mounted
@@ -2423,7 +2424,7 @@ different string rather than only a redder box, and which is what lets it reach
 the audio channel at all; `error` announces `recap.runFailed`; the 90-second
 timeout announces `recap.noReplyYet`. A screen-reader user who hears nothing after an errored or
 partly blind run is left in the worst state this feature can produce — believing
-a complete recap arrived — which is the same conflation Aaron's decision forbids
+a complete recap arrived — which is the same conflation the deployment owner's decision forbids
 on screen, arriving through the audio channel instead. `partial` is the one most
 likely to be forgotten, because it looks successful: prose arrives, the bubble
 fills, and only the missing header says otherwise, and a header is not an
@@ -2633,7 +2634,7 @@ different bar:
 ### Demo mode — decided 2026-09-05
 
 Demo mode has no Supabase client, no session, no `messages` and no Hermes.
-**Aaron's decision: keep the trigger visible, and label what it produces clearly
+**The deployment owner's decision: keep the trigger visible, and label what it produces clearly
 as a sample.** That reverses this document's earlier position, which ruled a
 fixture recap out entirely — and the earlier text argued it badly, treating
 "labelled sample" and "fabrication presented as real" as the same thing. They are
@@ -2729,7 +2730,7 @@ its own small piece of work.
 ### Open questions — what is actually left
 
 All twelve of the original list are closed, and so are the four this document's
-own answers created. Aaron answered ten on 2026-09-05, `/api/payload/[id]`
+own answers created. The deployment owner answered ten on 2026-09-05, `/api/payload/[id]`
 answered its own when the route gained its `can_modify` check, and the twelfth —
 **the recap toolset** — closed in a second round the same day. The second round
 also closed **the result envelope** (this server defines and validates it, and
@@ -2745,8 +2746,8 @@ Two things remain, and they are different in kind. One is a decision the third
 round created rather than closed. The other is not a decision at all — it is a
 fact about the box that nobody here can settle by thinking harder.
 
-1. **`profiles.lang` — Aaron's, and the reason it is open is that answering him
-   properly costs more than he asked for.** He said the server must derive the
+1. **`profiles.lang` — the deployment owner's, and the reason it is open is that
+   answering them properly costs more than they asked for.** They said the server must derive the
    language from the authenticated dashboard preference. There is no such
    preference: language is `localStorage["dovis.lang"]`, read and written in
    `theme-provider.tsx`, and `profiles` has no `lang` column. So the fork is a
@@ -2754,7 +2755,7 @@ fact about the box that nobody here can settle by thinking harder.
    validated `'en' | 'zh-TW'` on the request — a claim rather than a record, but
    not arbitrary once the enum is enforced, and no worse in its worst case than
    prose in the wrong language on the caller's own screen. **The recommendation is
-   the column**, because it is what he actually said and because it incidentally
+   the column**, because it is what they actually said and because it incidentally
    fixes a real thing: today a boss's language does not follow him to his phone.
    The argument in full, including the divergence from the timezone route, sits
    with the strings above. **It blocks nothing.** The request turn carries `lang`
@@ -2810,7 +2811,7 @@ one of them changes what gets built:
   whenever the boss typed during a run.
 - **The corrected schema.** `WEB-CHAT-DESIGN.md` renamed the column to
   `author_id` and explains why; Hermes' integration answers §9 still specify
-  `owner_id` on both tables. If Aaron asks the box to insert replies without that
+  `owner_id` on both tables. If the deployment owner asks the box to insert replies without that
   correction travelling alongside, Hermes will build against a column name that
   does not exist.
 
@@ -2832,8 +2833,8 @@ one, so each table is altered exactly once:
   depends on, since routing the owner's own settings through a server route buys
   nothing while the browser can write the row directly
 
-`profiles.lang` is **not** on that list, because it is Aaron's decision and it is
-still open. If he takes the column, it joins the `profiles` bullet and the table
-is still altered once; if he leaves it, the validated enum on the request needs no
-migration at all. That is the only reason the two are worth deciding before the
+`profiles.lang` is **not** on that list, because it is the deployment owner's
+decision and it is still open. If they take the column, it joins the `profiles`
+bullet and the table is still altered once; if they leave it, the validated enum
+on the request needs no migration at all. That is the only reason the two are worth deciding before the
 migration is written rather than after.
