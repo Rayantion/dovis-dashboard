@@ -488,14 +488,16 @@ curl -s https://aaron-dovis-dashboard.vercel.app/api/health
 ## Catch me up
 
 **Status: designed, not built. Blocked on the chat above.** Aaron asked for this
-2026-09-03, alongside the chat itself.
+2026-09-03, alongside the chat itself, and settled ten of its twelve open
+questions on 2026-09-05. Those answers are folded into the body below rather than
+left in a list at the foot; what remains at the foot is genuinely still open.
 
 A quick action inside the chat, also fired by typing *"Catch me up"* or *"What
 did I miss?"* — and by their Chinese equivalents, which is a requirement and not
 a nicety; see the strings below. It summarises what changed since the boss last
 actually looked: relevant mail, calendar changes and upcoming meetings, new and
 changed queue items, decisions, unresolved conversations, anything urgent. It
-states the period it covers — *"Since your last review — 3 September 2026,
+states the period it covers — *"Since your last review — 5 September 2026,
 09:20"* — and it is strictly read-only. It must not draft or send mail, create
 calendar events, touch a todo, write a file, or cause anything else to happen
 outside the box.
@@ -509,10 +511,10 @@ is upstream of this feature, so nothing here ships before build-order step 3
 above. Hermes' own integration answers close on the same instruction — *"Do not
 build the future items merely because they appear in the design document."*
 
-That ordering is not a formality. Two of the three hard problems below — where
-the success signal comes from, and which route the run executes on — are decided
-by how `/api/chat` and the Hermes routes are built. Deciding them here and
-building them later is the right order; building this first is not possible.
+That ordering is not a formality. One of the three hard problems below — which
+route the run executes on — is still decided by how the Hermes routes are built.
+The other two, where the success signal comes from and who writes it down, were
+decided on 2026-09-05 and are settled here.
 
 ### The endpoint, and what a recap turn actually is
 
@@ -521,16 +523,28 @@ body. Two reasons, and the second is the load-bearing one. A flag in the body is
 a client-supplied route selector, which this design refuses everywhere else —
 `{"role":"assistant"}` is not evidence of anything, and neither is
 `{"recap":true}`. And `/api/recap` is the **only** door that opens a review
-window and hands out the stamp that will later close it. The mark itself is
-written by exactly one of two actors — Hermes, or `/api/recap/seen` — and never
-by `/api/chat`, never by the browser. Keeping the window-opening behind one
-narrow door is worth more than the handful of lines the two routes share.
+window. The marks that later close it are written by exactly one actor —
+`POST /api/recap/seen`, on this side, under `service_role` — and never by
+`/api/chat`, never by Hermes, never by the browser. Keeping the window-opening
+behind one narrow door is worth more than the handful of lines the two routes
+share.
 
 What it does, in order: authenticate the session with `requireProfile()`; read
 the caller's `last_seen_at`; find or create that caller's recap conversation;
-insert the user's turn; take the window-open stamp from that inserted row; then
-forward to Hermes. The insert happens before the forward, matching what
-`/api/chat` already has to do.
+insert the user's turn; take the window-open stamp from that inserted row;
+assemble the queue delta and the caller's own unresolved threads; resolve the
+timezone; then forward to Hermes, naming the caller's profile and the turn this
+run answers. The insert happens before the forward, matching what `/api/chat`
+already has to do.
+
+It returns, to the browser: the window that turn opened, whether this was a first
+run, and the id of the turn itself. **The window is what the browser holds**, for
+this run's header and nothing else. The turn id is useful to it — a reply that
+names that turn is provably *this* run's reply rather than a stale one — but
+**the turn id's durable job is not in the browser at all.** It travels to Hermes
+with the request and comes back on the reply, so that closing the window is a
+property of the rows rather than of the tab that opened it. Why that distinction
+carries weight is worked out under the confirmation route below.
 
 **Which conversation it lands in.** A recap lands in **one reused conversation
 per author**, marked `source = 'recap'`, exactly the shape the parent document
@@ -564,9 +578,12 @@ period header and the pending state, and posts to `/api/recap` instead of
 `/api/chat` when it matches. **The server re-runs the same matcher** on the
 submitted content before opening a window. That is not about capability — the
 recap route is *narrower* than `owner-chat`, so getting it for an arbitrary
-prompt is a downgrade rather than an escalation. It is about the mark: any POST
-to `/api/recap` moves `last_seen_at`, and a turn that is not a recap request must
-not be allowed to burn the boss's window.
+prompt is a downgrade rather than an escalation. It is about the marks. A POST to
+`/api/recap` no longer moves anything by itself, but it stamps a user turn whose
+timestamp is the value the confirmation route will later write as the new floor.
+A turn that is not a recap request must not be allowed to mint that stamp, or an
+ordinary question answered on the recap route silently burns the boss's period
+when its reply lands.
 
 Normalise before comparing: trim, collapse internal whitespace, lower-case, and
 strip trailing punctuation in both scripts (`.`, `?`, `!`, `。`, `？`, `！`). So
@@ -578,23 +595,47 @@ with a period header attached to it, which is a lie about what the turn was.
 A phrase the matcher misses falls through to `/api/chat` and is answered on the
 ordinary route with wider tools. That is a miss toward a capability the principal
 already has, so it is not an escalation — but the read-only guarantee and the
-period header silently do not apply to that turn, and the mark does not move.
+period header silently do not apply to that turn, and the marks do not move.
 **The guarantee covers the button and the listed phrases. It does not cover every
 sentence that means the same thing, and it must not be described as if it does.**
 
-### The review mark
+### The review marks, and why there are two of them
 
-One durable fact per authenticated user, on the row the owner already audits:
+Three durable facts per authenticated user, on the row the owner already audits:
 
 ```sql
 alter table public.profiles
   add column if not exists last_seen_at timestamptz;
 
+alter table public.profiles
+  add column if not exists last_scan_at timestamptz;
+
+alter table public.profiles
+  add column if not exists timezone text;
+
 comment on column public.profiles.last_seen_at is
-  'The moment the last successfully generated recap OPENED its window: the '
-  'created_at of the user turn that requested it, never the reply''s. NULL means '
-  'no recap has ever run for this account. Advanced only when a recap exists — '
-  'never on page load, never on refresh(), never on a webhook acknowledgement.';
+  'THE FLOOR. Where the next recap''s window starts. Holds the created_at of the '
+  'user turn that OPENED the last confirmed recap — deliberately before the model '
+  'ran, so rows written during the run are re-reported rather than skipped. NULL '
+  'means no recap has ever completed for this account. Written only by '
+  '/api/recap/seen, and only for a reply whose result is success or empty.';
+
+comment on column public.profiles.last_scan_at is
+  'THE PROOF SOMEBODY LOOKED. Holds the created_at of the REPLY row of the last '
+  'confirmed recap — the latest possible instant, because this is the number the '
+  'words "checked just now" refer to. NULL means no recap has ever completed, '
+  'which is how the UI tells "nothing new" from "never run" — and which stays '
+  'true only because the browser reconciles an unconfirmed reply on thread load. '
+  'Advances on an EMPTY result exactly as on a successful one; never on an error. '
+  'Nothing is ever queried against it, which is why it may safely hold the later '
+  'timestamp.';
+
+comment on column public.profiles.timezone is
+  'IANA zone name (e.g. Asia/Taipei) used to render every time in a recap, header '
+  'and body alike. The explicit fallback for when the account''s Google Calendar '
+  'zone is unavailable — which is the path this deployment runs on today, because '
+  'the dashboard''s own Google OAuth is unconfigured and the box''s credential is '
+  'not visible from here. The VPS timezone is never used and never inferred.';
 ```
 
 `add column if not exists` because `schema.sql` is re-runnable by design — it
@@ -602,25 +643,38 @@ uses `create table if not exists`, `create or replace function` and
 `drop policy if exists` throughout, and a bare `add column` fails on the second
 run and aborts everything after it.
 
-Nullable, no default. A default of `now()` would make the very first "Catch me
-up" cover zero elapsed time, which is the one run where the window matters most.
-NULL means *no prior review*, the route substitutes a default first window, and
-the header states the window that was actually used rather than a fixed sentence
-about the last 24 hours.
+**Why two timestamps rather than one.** They hold different instants, and
+collapsing them forces one of two lies. A single column holding the *turn* time
+would make the idle line say "checked at 09:20" for a run that finished at
+09:21:30 — a small lie, but the empty message's entire job is to be exactly true
+about when somebody last looked. A single column holding the *reply* time would
+let the window floor swallow the run's own duration, so every row written while
+the model was thinking sits below the next run's floor and is never reported by
+any recap — the fatal one, traced in full below. Two columns, written in one
+statement, from two different rows: the floor from the turn, the proof from the
+reply.
 
-The earlier draft of this comment said the column "sits beside `last_sign_in_at`
-and means something else: signing in is not reviewing." **That comparison is
-wrong in this deployment and has been removed.** `last_sign_in_at` has exactly
-one writer — `src/app/api/auth/password-changed/route.ts` — and `signIn()` in
+Both are nullable with no default. A default of `now()` would make the very first
+"Catch me up" cover zero elapsed time, which is the one run where the window
+matters most. NULL on `last_seen_at` means *no prior review*, the route
+substitutes the first-run window decided below, and the header states the window
+that was actually used rather than a fixed sentence. NULL on `last_scan_at` means
+*nobody has ever looked*, which is one of the two empty messages Aaron asked for.
+
+The earlier draft of the `last_seen_at` comment said the column "sits beside
+`last_sign_in_at` and means something else: signing in is not reviewing."
+**That comparison is wrong in this deployment and has been removed.**
+`last_sign_in_at` has exactly one writer —
+`src/app/api/auth/password-changed/route.ts` — and `signIn()` in
 `dovis-provider.tsx` never touches it, so the column records the last *password
 change*. Anchoring a permanent schema comment to that would bake the
 misunderstanding in. Renaming the column is a migration plus a route change plus
 a `types.ts` change for a column this feature never reads, so it is **recorded
 here as a live finding and deliberately not folded into this work.**
 
-**No client code writes the mark, and there is no self-UPDATE policy — but the
-owner's browser can still write it today, and an earlier draft asserted otherwise.**
-`"owner updates"` in `schema.sql` §4 is
+**No client code writes the marks, and there is no self-UPDATE policy — but the
+owner's browser can still write them today, and an earlier draft asserted
+otherwise.** `"owner updates"` in `schema.sql` §4 is
 `using (public.dovis_is_owner()) with check (public.dovis_is_owner())`, with no
 restriction on which row it applies to — unlike `"owner deletes"`, which carries
 `and id <> auth.uid()`. `dovis_is_owner()` is true for the owner on every row
@@ -628,8 +682,8 @@ including their own, so the owner's browser, holding the anon key and its own
 JWT, can `update profiles set last_seen_at = '2030-01-01' where id = auth.uid()`
 straight through PostgREST and permanently blank its own window. That is the
 failure this section calls the one that matters, reachable from the client as the
-schema stands. It also undercuts the care taken below to have the fallback route
-accept an id and never a timestamp, since the column can simply be written
+schema stands. It also undercuts the care taken below to have the confirmation
+route derive every value it writes, since the column can simply be written
 directly.
 
 Nothing in the repo uses that capability: every `profiles` write is server-side
@@ -637,29 +691,30 @@ under `service_role`, `/api/team/update` included, and `service_role` bypasses
 RLS entirely. **So mirror `"owner deletes"` and add `and id <> auth.uid()` to
 `"owner updates"`.** It costs nothing, because no client path relies on the owner
 updating their own row, and it closes the only client-reachable way to corrupt
-the mark. That one line belongs with the migrations at the foot of this section.
+the marks. That one line belongs with the migrations at the foot of this section.
 
 **Do not, separately, add a client policy to make the browser a legitimate
 writer.** Postgres RLS cannot restrict which *columns* an UPDATE touches, so a
 self-update policy on `profiles` is a self-update policy on `role`, and that is
 the worst line available in this codebase. The established shape is already in
 the repo: `/api/auth/password-changed` writes under `service_role` after
-`requireProfile()` succeeds, with no client policy at all. The mark follows it.
+`requireProfile()` succeeds, with no client policy at all. The marks follow it.
 
-**The mark advances to the moment the window was OPENED, not to the recap
+**`last_seen_at` advances to the moment the window was OPENED, not to the recap
 reply.** An earlier draft had it advance to the reply row's `created_at` and
 claimed open-ended windows have no seam under any clock. **That was a logic error
 and it produced exactly the failure this section calls the one that matters.**
 Trace it. Hermes reads the sources at T1 and inserts the reply at T2, and a
 mail-and-calendar summarisation on a 4GB box is tens of seconds, not
-milliseconds. If the mark becomes T2, every row written in (T1, T2] was too late
+milliseconds. If the floor becomes T2, every row written in (T1, T2] was too late
 for this run to read and is already below the next run's floor. **No recap ever
 reports it.** A whole model-run's worth of mail, silently, every single time.
 
 Advancing to T0 — the instant the window opened, before Hermes was called —
 collapses the seam in the safe direction. Rows written in (T0, T1] are read by
-this run *and* sit above the new mark, so the next run repeats them. Repetition
-is the benign failure; a hole is not.
+this run *and* sit above the new floor, so the next run repeats them. Repetition
+is the benign failure; a hole is not. `last_scan_at` may take T2 precisely
+because it is not a floor and nothing is ever compared against it.
 
 **Take T0 from Postgres, not from Node.** `todos.created_at` is a Postgres clock
 value, and the recap's whole windowed half is a comparison against it. A
@@ -667,121 +722,227 @@ value, and the recap's whole windowed half is a comparison against it. A
 into the one predicate that must not have one. The user turn `/api/recap` inserts
 before forwarding already carries a Postgres `default now()`, so read it back
 with `.select()` and use that: it is the request time, it is on the right clock,
-and it is provably before Hermes read anything.
+and it is provably before Hermes read anything. T2 comes from the reply row's
+`created_at`, which is on the same clock for the same reason.
 
-That also makes the Hermes-side contract easier to state. The instruction is
-**"stamp this exact timestamp we are giving you"**, not "stamp `now()`".
-
-**Advance it monotonically** — `greatest(last_seen_at, $1)` — because the two
+**Advance both monotonically** — `greatest(column, $1)` — because the two
 directions are not symmetric. A mark that lands too far back shows the boss an
 item twice. A mark that lands too far forward loses it silently. `greatest`
-ignores NULLs in Postgres, so the first run needs no `coalesce`.
+ignores NULLs in Postgres, so the first run needs no `coalesce`. With one writer
+this is now an invariant rather than a hope: there is a single statement, in a
+single route, and it is the one below.
 
-**Both writers enforce that, Hermes included, so the contract above is a
-statement rather than an assignment:**
+#### Who writes the marks — decided 2026-09-05: this server, not Hermes
+
+**The earlier draft recommended that Hermes stamp the mark in the same
+service-role write that inserts the reply, and called the dashboard-side route a
+measurably weaker fallback. That recommendation is reversed.** Aaron's
+instruction is that the authenticated dashboard server writes it. The reasoning
+below is rewritten rather than annotated, because the old reasoning reached a
+conclusion this document no longer holds.
+
+Start from what is known, and when. The webhook response is an acknowledgement
+that the run was accepted, not the answer. So `/api/recap` cannot know that a
+recap succeeded; at the moment it returns, nothing has happened yet. Advancing on
+that acknowledgement would burn the period on a run that then dies on the box,
+and the boss would lose that window permanently with no way to know. That much
+the earlier draft had right, and it is still the reason nothing is written at
+trigger time.
+
+The knowledge arrives later, and it arrives in exactly one form: **the reply row
+appears.** That is the event, and — this is what the earlier draft undervalued —
+it is an event *this side can see*. `messages` is in the realtime publication, so
+the row reaches the browser the moment it is written. So the write happens then,
+from a route the browser calls once the reply is in hand:
+
+```
+POST /api/recap/seen
+{ "replyId": "<the dovis row that just arrived>" }
+```
+
+**One id, and never a timestamp.** An earlier draft had the client pass the recap
+row's `created_at` directly, which hands a buggy or hostile client the ability to
+send any future timestamp and permanently blank a window — the failure above, on
+demand. `requireProfile()` establishes *who is calling*, not *what they may claim
+about a row*, and this repo makes that distinction carefully everywhere else. The
+route derives every value it writes.
+
+**The reply names its own turn, and that is what makes the pair safe.**
+Server-side, after `requireProfile()`, under `service_role`: load the reply by
+id; reject unless it is `role = 'dovis'` and carries the caller's own
+`author_id`. Read `meta.turn_id` — the id `/api/recap` sent to Hermes, echoed
+back on the reply — and load that row; reject unless it is `role = 'user'`,
+carries the same `author_id`, sits in the same conversation, and has a
+`created_at` strictly earlier than the reply's.
+
+**An earlier draft took the turn id from the browser and checked only that the
+two rows co-existed in one conversation in the right order. That is an arrival
+proof, not a provenance proof**, and the gap is the same hole the paragraphs
+above spend so long closing. The recap conversation is an ordinary conversation
+in the Gemini-style list — every recap in one scrollable place — and the
+`disabled` guard covers the recap *trigger*, not the composer. So the boss typing
+an ordinary question at 10:00 while a run launched at 09:00 is still thinking is
+a normal event. Pair that 10:00 turn with the 09:00 run's reply and the floor
+jumps to 10:00: everything in (09:00, 10:00] sits below every future floor and no
+recap ever reports it. Deriving the turn from the reply removes the client's
+ability to mispair at all, and it is why the ordering test is a sanity check
+rather than the argument.
+
+**If Hermes cannot echo the id, require adjacency instead.** Derive the turn as
+the newest `role = 'user'` row in that conversation older than the reply, and
+reject the confirmation if any other `role = 'user'` row sits strictly between
+the two. That is weaker in exactly one way — it refuses a legitimate confirmation
+whenever the boss typed while the run was in flight — but it refuses rather than
+guesses, so it fails toward not advancing, and the next recap simply repeats the
+period.
+
+Deriving the pair from the reply also gives the confirmation a durable home.
+Nothing depends on the tab that started the run still being open: any load of the
+thread can reconstruct the pair, which is what makes the reconciliation below
+possible at all. Then read the result the reply carries, and on `success` or
+`empty` only:
 
 ```sql
 update public.profiles
-   set last_seen_at = greatest(last_seen_at, <the exact value supplied>)
+   set last_seen_at = greatest(last_seen_at, <turn.created_at>),
+       last_scan_at = greatest(last_scan_at, <reply.created_at>),
+       timezone     = coalesce(<zone named on reply.meta>, timezone)
  where id = <the caller's profile id>;
 ```
 
-Phrased as a plain assignment it carries no guard, and two overlapping runs — the
-double-trigger row below concedes they happen — land their marks in completion
-order rather than value order. The direction is safe, so nothing vanishes; but an
-invariant enforced on neither of the two writers this design actually recommends
-is not an invariant, and the failure table cites it as though it were.
+One statement, so the two marks can never disagree about whether a run happened.
+The third assignment is a cache rather than a mark — it is what makes the
+timezone fallback self-healing, described below — and `coalesce` in that
+direction means a reply that names no zone is a no-op and can never blank a good
+one. The route returns all three values, and the browser patches its session from
+that response, which is authoritative because the route has just written it.
 
-#### A run that could not read a source burns that source's window
+**Note what the floor takes.** It is the *turn's* timestamp, not the reply's,
+even though the reply is the row being confirmed and is sitting right there in
+the same query. That is the whole (T1, T2] argument above, and it survives the
+reversal untouched: writing the reply's `created_at` as the floor would
+reintroduce the silent hole on the branch that now actually ships. The reply's
+timestamp goes to `last_scan_at`, where nothing is ever compared against it.
 
-The mark is one timestamp covering every source, and that is where the remaining
-hole is. A recap whose Google refresh token has expired still produces a reply,
-so under the rule above — *advanced only when a recap exists* — the mark advances
-to T0 regardless. Every mail item in (previous mark, T0] then sits below every
-future floor. **No recap ever reports it**, which is the same silent hole as the
-T2 error, arriving on the mail axis instead of the timing axis, and it is the
-likeliest of the three to actually happen: an expired refresh token is routine.
+**Aaron's decision that the reply carries an explicit result repairs most of what
+made this path weaker.** The old objection was precise and fair: this route
+attests *arrival* rather than *generation*, so a reply landing proved a row
+existed but not that a recap had been produced. With an explicit
+`success | empty | error` on that row, it proves both. **The route refuses to
+advance either column on `error`, and treats a missing or unrecognised result as
+`error`.** A run whose Google token had expired no longer moves the floor, so
+that window of mail is re-covered by the next recap instead of being lost. That
+is the gate the earlier draft could only ask for, and it is the reason the
+"weaker" verdict no longer stands.
 
-**Recommendation: advance the mark only on a run that reports full source
-coverage.** A partially-blind run leaves the mark where it was, and the next
-recap re-covers the period, which is the benign direction again. That requires
-the run to say which sources it actually read — a structured signal, not prose —
-which is why open question 5 is not a presentation question. It decides whether
-this is buildable at all.
+**The residual, stated rather than hidden: if no browser ever confirms a reply,
+the marks do not advance — and the cost is not the same on the two columns.** On
+`last_seen_at` it is repetition: the next recap covers a period the boss has
+already read, which is the benign direction. On `last_scan_at` it is worse,
+because that column is what the idle line reads. NULL would stop meaning *no
+recap has ever completed* and start meaning *no confirmation has ever completed*,
+so a first-ever recap whose reply was never confirmed leaves the dashboard
+printing "No recap has been generated yet." directly above the recap it
+generated. That is exactly the conflation Aaron's decision of 2026-09-05 exists
+to prevent, arriving through the transport instead of through the result. The
+90-second refetch does not rescue it: in the failure being described the socket
+is the thing that is down, that single refetch has already fired and found
+nothing, and nothing fires again.
 
-**If the answer is prose, then per-source burn is accepted, and it must be said
-plainly rather than left as "covers less than it appears to" in a mitigation
-column.** In that case a recap that could not reach the mailbox costs the boss
-that window of mail permanently, and nothing on this side can detect it or
-compensate for it.
+**So the confirmation is not tied to the run that launched it. On loading the
+recap thread, the browser reconciles.** If the newest `dovis` reply in that
+conversation carries a result and is newer than the session's `last_scan_at`, the
+browser posts that reply to `/api/recap/seen` there and then. The route runs the
+same checks, derives the same pair from the same `meta`, and `greatest()` makes a
+repeated confirmation a no-op. A reply that was missed while the socket was down
+is therefore confirmed on the next page load, both columns converge, and the
+comment on `last_scan_at` stays true.
 
-#### Who advances it, and why this is the unresolved part
+With that in place the residual really is repetition, and only until the next
+load: a reply that lands unseen leaves the next recap covering a period already
+read. That fails **safe** — repetition, never a hole — and it is now a named
+property of the design rather than a gap in it. The 90-second refetch is what
+keeps even that rare within a session.
 
-The webhook response is an acknowledgement that the run was accepted, not the
-answer. So `/api/recap` never learns that a recap was generated; it learns only
-that a run started. Advancing on the ack burns the period on a run that may die
-on the box, and the boss loses that window permanently with no way to know.
+**The reversal also shrinks what Hermes has to be trusted with, which is worth
+saying plainly.** The old recommendation required a Hermes-side contract that did
+not exist, in the same class as the two assumptions this document has already had
+to retract — per-request toolsets, and Telegram persistence. What remains is
+smaller: Hermes must be told which profile it is answering for, so the reply row
+carries the right `author_id` and the run scopes to the right account, and it
+must put the result — and the id of the turn it answered — on the reply. None of
+that is a stamp into `profiles`, and none of it gives the box write access to the
+account table.
 
-The only actor that knows a recap exists is Hermes, at the instant it inserts the
-reply into `messages` with the service-role credential it already holds.
+**Being told the profile id is still a field that has to be added, and so is the
+turn id.** Neither `WEB-CHAT-DESIGN.md` nor Hermes' integration answers describe
+either one crossing the wire — step 2 says the route forwards "the last N turns",
+and Hermes' §2 step 4 says the same. So `/api/recap` sends both and Hermes accepts
+them; the echo is what the confirmation route reads back.
 
-**Recommendation: Hermes stamps the mark in the same service-role write.** One
-write, by the one process that knows the recap is real, in the same transaction
-as the row that proves it. It needs no new dashboard route, no client policy and
-no ack heuristic. The value it writes is the one `/api/recap` handed it, through
-the `greatest()` statement above.
+**Where the result lives.** One nullable column on the table the chat migration
+already creates:
 
-**This is a Hermes-side contract that does not exist today**, and it is the same
-class of assumption that has already been retracted twice in this document —
-per-request toolsets, and Telegram persistence. Confirm it against the box before
-designing around it.
+```sql
+-- Belongs in the chat migration, with the table it sits on.
+alter table public.messages
+  add column if not exists meta jsonb;
 
-It also needs the recap run to be told which profile it is answering for.
-**Neither `WEB-CHAT-DESIGN.md` nor Hermes' integration answers describe the
-caller's profile id crossing the wire** — step 2 says the route forwards "the
-last N turns", and Hermes' §2 step 4 says the same. So this is a field
-`/api/recap` has to add and Hermes has to accept, not a capability that already
-exists. Saying otherwise in a paragraph about unverified Hermes assumptions would
-be the mistake this paragraph is about.
-
-**If the box will not do that**, the fallback is entirely on this side, and it
-must be built carefully:
-
+comment on column public.messages.meta is
+  'Structured sidecar for a Dovis reply; NULL on ordinary turns. A recap reply '
+  'carries {"result":"success"|"empty"|"error","turn_id":"<the user turn this run '
+  'answers>", ...}; content stays the prose. This column streams over Realtime '
+  'with its row, so it must never hold anything the select policy does not '
+  'already permit — no payload bodies, no filesystem paths, no secrets.';
 ```
-POST /api/recap/seen   { "turnId": "<uuid of the user turn /api/recap inserted>" }
-```
 
-Server-side, after `requireProfile()`: load that message by id under
-`service_role`; reject unless `role = 'user'` **and** `author_id` is the caller's
-own id; reject unless a `dovis` row exists in the same conversation with a later
-`created_at` — that existence check *is* the arrival proof; then write
-`last_seen_at = greatest(last_seen_at, <the created_at of the user turn
-identified by turnId>)`.
+`content` remains the reply's prose, which is what the transcript shows and what
+search indexes. `meta.result` is what the confirmation route and the UI branch
+on, and `meta.turn_id` is what makes the pair derivable. Aaron's decision of
+2026-09-05 is exactly this split: **Hermes returns structured data internally,
+and the dashboard renders concise natural-language prose in the chat.** The two
+can never contradict each other, because the structure decides which sentence
+gets rendered.
 
-**The dovis row is used only as proof that a reply arrived. Its own `created_at`
-is never written.** Writing the reply's timestamp here would reintroduce, on the
-branch that ships if Hermes says no, the exact (T1, T2] hole the primary path
-spends three paragraphs eliminating. The value written is always the window-open
-stamp, on both paths.
+**Webhook failure handling is explicit and durable, per Aaron 2026-09-05, and it
+is a Hermes-side requirement that does not exist today.** A run that fails on the
+box must still write a row, carrying `result: "error"`. Without it a failure is
+indistinguishable from a run still in flight, every failure degrades to the
+90-second timeout, and the marks stay put for the right reason by accident rather
+than by design. It also follows that **a successful webhook response is not
+evidence the Supabase write happened** — the acknowledgement says the run was
+accepted and nothing more, so the persistence needs its own retry and its own log
+on the box. This retires what was previously open question 6.
 
-**The browser supplies an id and never a timestamp.** An earlier draft had the
-client pass the recap row's `created_at` directly, which hands a buggy or hostile
-client the ability to send any future timestamp and permanently blank a window —
-the failure above, on demand. `requireProfile()` establishes *who is calling*,
-not *what they may claim about a row*, and this repo makes that distinction
-carefully everywhere else. The route derives every timestamp itself.
+#### What a partially blind run does to the floor
 
-The fallback attests *arrival* rather than *generation*, which is weaker — a
-recap that lands while the socket is down does not advance the mark until the
-thread is refetched — but it fails in the safe direction, and it is buildable
-without the box. Take it only if the first answer is no.
+The floor is one timestamp covering every source, and that is where the remaining
+hole is. A recap whose Google refresh token has expired can still produce a
+perfectly readable reply about the queue. If that reply reports `success`, the
+floor advances, every mail item in (previous floor, T0] sits below every future
+floor, and **no recap ever reports it** — the same silent hole as the T2 error,
+arriving on the mail axis instead of the timing axis, and the likeliest of the
+three to actually happen, because an expired refresh token is routine.
 
-#### How the browser learns the new mark
+The gate above closes this **only if a partially blind run reports `error` rather
+than `success`.** That is the one thing the three-value result does not settle by
+itself, and it is question 2 at the foot. The rule this design needs is a
+sentence long: *a run that could not read a source it was asked to read is an
+`error`, however much of the rest it managed* — or the result carries a
+per-source coverage field and the route requires full coverage before advancing.
+Either shape works. What does not work is a `success` that quietly means "most of
+it".
 
-**It does not learn it on its own, and the earlier draft missed this.** The
-column arrives free at bootstrap on both existing read paths — the provider does
+Until that is confirmed, per-source burn is still possible, and it should be said
+in those words rather than softened into "covers less than it appears to" in a
+mitigation column.
+
+#### How the browser learns the new marks
+
+**It does not learn them on its own, and the earlier draft missed this.** The
+columns arrive free at bootstrap on both existing read paths — the provider does
 `.from("profiles").select("*").eq("id", user.id).single()` and `requireProfile()`
-does the same server-side — but nothing refreshes it afterwards. `profiles` is
+does the same server-side — but nothing refreshes them afterwards. `profiles` is
 **not** in the realtime publication (`schema.sql` §5 adds only `todos` and
 `dashboard_widgets`), so a service-role write never streams. And `fetchAll()`
 never touches `session.profile`: for an owner it refetches the profiles *list*
@@ -789,13 +950,12 @@ into separate state, and for an assistant it deliberately returns
 `profiles: null`. So without a fix, the second click of the day still renders the
 first window's date, for the rest of the session.
 
-The fix is the shape the provider already uses — but **the window and the mark
-are two different values, and only the second one is the mark.** `/api/recap`
-returns at T0, before Hermes has been called and before anything has been
-stamped; on the recommended path the mark may never move at all, because the run
-may die on the box, in which case the database correctly keeps the old value.
+The fix is the shape the provider already uses — but **the window and the marks
+are different values, and only the marks are durable.** `/api/recap` returns at
+T0, before Hermes has been called and before anything has been stamped; the run
+may die on the box, in which case the database correctly keeps the old values.
 Writing that returned window into `session.profile.last_seen_at` would have the
-browser believe a mark the database does not hold, and the next trigger would
+browser believe a floor the database does not hold, and the next trigger would
 then claim a narrower period than the run it launches actually covers — the one
 thing the header must never do.
 
@@ -804,22 +964,32 @@ So keep them apart:
 - **The window `/api/recap` returns is per-run state**, held for that run's
   header and nothing else. It is what the pending bubble and the delivered reply
   are labelled with, and it never touches the session.
-- **`session.profile.last_seen_at` is patched only on evidence the mark moved.**
-  On the Hermes path that evidence is the dovis reply landing in the recap
-  conversation over Realtime — `messages` *is* in the publication, per the parent
-  document — after which the client re-reads its own profile row, which the
-  `"read own profile"` select policy already permits. On the fallback path,
-  `/api/recap/seen` returns the mark it just wrote and that response is
-  authoritative on its own.
+- **`session.profile.last_seen_at`, `last_scan_at` and `timezone` are patched
+  only from the `/api/recap/seen` response**, which returns exactly what it
+  wrote — including on the reconciliation call, which is that same route. There
+  is no second path and no inference: if no confirmation happened, or the route
+  refused to advance, the session keeps the old values, which is the truth.
 
-Either way the patch itself is the idiom `changePassword` already uses:
+The patch itself is the idiom `changePassword` already uses:
 
 ```ts
-setSession((s) => (s ? { profile: { ...s.profile, last_seen_at: next } } : s));
+setSession((s) =>
+  s
+    ? { ...s, profile: { ...s.profile, last_seen_at: seen, last_scan_at: scan, timezone: zone } }
+    : s,
+);
 ```
 
-`Profile` in `src/lib/types.ts` gains `last_seen_at: string | null` in the same
-change — that file's own comment requires it to mirror the schema exactly.
+`Profile` in `src/lib/types.ts` gains `last_seen_at: string | null`,
+`last_scan_at: string | null` and `timezone: string | null` in the same change —
+that file's own comment requires it to mirror the schema exactly. **That will
+break the build until the fixtures are updated, which is the point:**
+`demoProfiles` in `src/lib/demo-data.ts` is typed `Profile[]` and built from
+plain object literals, so three new required fields fail `tsc` there immediately.
+The fixture in `tests/payload-route.test.ts` ends in `as Profile` and compiles
+regardless. So it is the demo data — not the tests — that the compiler forces you
+to think about, and the demo data is exactly where you have to decide what a
+sample recap claims about itself.
 
 #### The `is_owner()` duplicate, now fixed upstream
 
@@ -832,6 +1002,83 @@ Recording it because the *class* of mistake will recur: a design document writte
 against a remembered schema invents helpers the real schema already has, and two
 functions with one meaning drift apart across migrations. The check is cheap —
 grep the schema for the helper before writing a policy that needs one.
+
+### The window: seven days back, seven days forward — decided 2026-09-05
+
+**The first-ever recap covers the last 7 days, and every recap looks 7 days
+forward for meetings.** Aaron settled both halves of what was open question 1
+together, which is right, because they were always the same product-visible span
+pointing in opposite directions.
+
+Seven days back rather than twenty-four hours, because the first run is the one
+where a short window is least defensible: a box that has been running for a while
+has a backlog, and a first recap covering a single day quietly withholds the
+thing the boss most likely missed. It is only ever the first run — every later
+run starts from `last_seen_at`, which after a daily habit is a day.
+
+Seven days forward because a recap that stops at tonight's calendar tells a boss
+reading it on Monday nothing about Wednesday's board meeting, and "upcoming
+meetings" was in the original ask precisely so it would. Both numbers belong to
+`/api/recap` rather than to a prompt: the forward horizon is asked for explicitly
+on every run, and the backward floor is computed as `T0 - 7 days` when
+`last_seen_at` is NULL.
+
+The header must state whichever window was actually used, which is why
+`sinceFirst` interpolates a date rather than carrying "the last 7 days" as a
+literal. The forward half is the same argument pointing the other way, twice
+over: `recap.ahead` interpolates the horizon rather than spelling "7" into two
+dictionaries, and it renders only for a run that actually had calendar read — see
+the UI states table and the assistant section. If the constant ever changes, the
+copy stays true without being touched; if the calendar is not there, the copy
+does not claim it was.
+
+### Timezone — decided 2026-09-05
+
+Every time a recap prints — the period header on this side, and "your 3pm
+meeting" in the body — is rendered in **the authenticated user's Google Calendar
+timezone**, falling back to an **explicit per-profile timezone**. The VPS
+timezone is never used, and must never be reached by omission. That was open
+question 7, and the failure it names is real: a header formatted in the viewer's
+browser zone above a body generated in the box's zone is one message disagreeing
+with itself about when a meeting is.
+
+**Today the first tier is unverified from this side, which is why the fallback
+column ships now rather than later.** `/api/health` reports `google:false`, and
+an earlier draft read that as "there is no Google credential on the box". It does
+not say that. The flag is
+`Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET && GOOGLE_REDIRECT_URI)` — a
+statement about the **dashboard's own** OAuth client configuration on Vercel, not
+about whether a refresh token exists anywhere. It means the dashboard cannot go
+and read a calendar timezone itself. It says nothing about the box, and the box
+plainly does hold a Google credential, because Dovis reads the mailbox on
+Telegram today — which the injection section below relies on. The endpoint that
+reports a credential is `/api/google/status`, whose `token` field is an existence
+check on the token file, and which is owner-only. So the honest statement is that
+the Google tier is unverified from here rather than dead, and `profiles.timezone`
+earns its place in the migration list on that weaker but sufficient ground.
+
+So `/api/recap` resolves a zone before forwarding and **always sends an explicit
+IANA name** — Hermes is never left to infer one, which is the only way "never the
+VPS timezone" can be enforced rather than hoped for. Resolution order: the
+account's Google Calendar zone when Google is connected; otherwise
+`profiles.timezone`; otherwise the zone the browser resolved and sent with the
+trigger. That last tier is a display preference rather than an authority, which
+is why it is safe to accept from a client in a way a timestamp is not — and when
+it is used, the header names the zone via `recap.timesIn`, so a wrong guess is
+visible rather than silent.
+
+The header is then formatted **in that same zone**, by passing `timeZone` into
+`toLocaleString` explicitly rather than letting it default to the browser's. A
+header in Taipei time above a body in Taipei time is one message; a header in the
+viewer's laptop zone above a body in the account's zone is the bug this decision
+exists to prevent, reintroduced by a missing option.
+
+When the Google tier does fire, the zone the run used comes back on `meta`, and
+the third assignment in the confirmation route's statement caches it into
+`profiles.timezone` alongside the marks — so the fallback self-heals and only the
+first run on an account can use a stale zone. That clause is a no-op on every
+reply that names no zone, which today is every reply, so it should read as
+obviously inert rather than as live behaviour.
 
 ### The Hermes route, and why the recap wants its own
 
@@ -858,17 +1105,18 @@ costs a config edit, a third secret to store and rotate, a `HERMES_RECAP_SECRET`
 in `.env.example` and in Vercel — and, per the question below, it may not be
 constructible at all.
 
-**Whether that toolset can be built is unverified and load-bearing.** Hermes
-exposes fixed toolsets per route and names three built-ins. `hermes-telegram` is
-far too wide. `hermes-webhook` has no mail or calendar read at all, and adds
-outbound web fetch, which is the one capability an injection-summarising run
-should not have. Neither is right. The config shape suggests toolsets are named
-and composable, and the answers say *"relevant built-in toolsets"* rather than
-*all* — but that is inference, not confirmation. Ask the box before designing
-around either answer. If a custom read-only toolset is not definable, **the recap
-degrades to the queue and conversation delta with no mailbox and no calendar** —
-smaller, still honest, still worth shipping, and it takes upcoming meetings with
-it, which is the largest single thing that answer costs.
+**Whether that toolset can be built is unverified and load-bearing.** Confirmed
+2026-09-05: Hermes supports **fixed toolsets per webhook route**, not arbitrary
+per-request toolsets — so the enforcement shape is right, and the question left
+is only what may be composed into one route. `hermes-telegram` is far too wide.
+`hermes-webhook` has no mail or calendar read at all, and adds outbound web
+fetch, which is the one capability an injection-summarising run should not have.
+Neither is right on its own. If a custom read-only composition is not definable,
+**the recap degrades to the queue and conversation delta with no mailbox and no
+calendar** — smaller, still honest, still worth shipping. Note what that now
+costs: it takes upcoming meetings with it, and upcoming meetings are the thing
+the seven-day forward horizon was just decided for. On that fallback
+`recap.ahead` must not render either, for the reason the assistant section gives.
 
 The one thing the fallback must **not** be is "run it on `hermes-telegram`
 anyway". Beyond the obvious, that toolset carries filesystem and terminal, so the
@@ -886,26 +1134,38 @@ Dovis reads the same mailbox on Telegram today. What it buys is that the *recap
 run itself* structurally cannot act — which is exactly what Aaron asked for, and
 which no prompt can deliver.
 
-### What an assistant's recap can contain
+### What an assistant's recap can contain — decided 2026-09-05
 
-Downstream of build-order step 1, which is still open: whether an assistant's
-chat gets mailbox and calendar **read** tools at all. The recap does not merely
-touch that question, it forces it — the box holds exactly one Google credential,
-the owner's, and there is no per-caller Google identity. An assistant recap that
-reads mail reads the principal's mail with the principal's token. Aaron should
-make the call in those terms.
+**Assistants get no Gmail and no Calendar, and that is now settled rather than
+downstream of build-order step 1.** Aaron's instruction is that assistant chat
+runs on a fixed restricted route with no Gmail, no Calendar, no write tools, no
+memory, no terminal and no MCP — `hermes-webhook` under the `no_mcp` restriction,
+which is the `assistant-chat` route the parent document already describes. That
+retires what was open question 4, and it retires it in the direction the terms
+demanded: the box holds exactly one Google credential, the owner's, so an
+assistant recap that read mail would be reading the principal's mail with the
+principal's token, under the principal's name, with no per-caller identity to
+scope it by.
 
-If reads stay withheld, which is still the recommendation, an assistant's recap
-is the queue plus their own conversations, by construction rather than by
-instruction.
+So an assistant's recap is **the queue plus their own conversations, by
+construction rather than by instruction**, and it runs on `assistant-chat` rather
+than a fourth route. A recap-specific route beside it would buy nothing: the
+existing toolset already has no mail, no calendar and no writes of any kind. The
+read-only guarantee there comes from the route the assistant's ordinary chat
+already uses, which is the strongest version of it available — one fewer secret,
+one fewer thing to misconfigure.
 
-**An assistant's recap runs on `assistant-chat`, not a fourth route.** That route
-is `hermes-webhook` + `no_mcp` — web search, extraction, vision, clarify — which
-already has no mail, no calendar and no writes of any kind, so a recap-specific
-route beside it would buy nothing. The read-only guarantee there comes from the
-existing toolset rather than from a recap-specific one. If Aaron ever grants
-assistants mailbox reads, that changes: an `assistant-recap` route becomes
-necessary for the same reason `owner-recap` is.
+**What that enumeration leaves out is outbound web fetch, which the route does
+carry**, and it should not be read as "strictly narrower than anything". The
+recap-route section above rejects `hermes-webhook` for the *owner's* recap partly
+on that ground — it is the one capability an injection-summarising run should not
+have — and an assistant's recap is a summarising run over externally influenced
+text too, since queue titles are derived from the principal's email, as
+`schema.sql` says in as many words. It is accepted here for two reasons, and
+neither is that the capability is absent: Aaron's instruction binds assistant
+chat to this route, and an assistant already reaches exactly this toolset through
+their ordinary chat, so the recap turn adds no reach they did not have a sentence
+earlier.
 
 **Note the toolset does not supply even the queue.** `hermes-webhook` has no
 database read of any kind. So an assistant's queue delta and their own unanswered
@@ -914,17 +1174,32 @@ forwarded as context, the same way the last N turns already are. The toolset is
 what makes the recap unable to reach *further*; it is not what makes it able to
 reach the queue.
 
-Scoping is free where it matters. `messages` and `conversations` select on
+**And that assembly is now permission-bearing, because `/api/payload/[id]`
+changed on 2026-09-05.** What was open question 12 — is that route intentionally
+role-blind? — has been answered by the code rather than by Aaron: it now requires
+`permissionsFor(auth.profile).canModify` before returning a payload, with tests
+in `tests/payload-route.test.ts` pinning the decision. An assistant without
+`can_modify` can see that a queue item exists and read its title, and cannot read
+the drafted body. **So `/api/recap` must assemble its queue delta from `todos`
+alone, and never join `todo_payloads`.** A recap that pulled a draft's subject
+and body into the context it forwards would route straight around the gate that
+route has just installed, and it would do it in prose, where nothing checks it.
+Titles and states only.
+
+Scoping is otherwise free. `messages` and `conversations` select on
 `author_id = auth.uid() or dovis_is_owner()`, so an assistant's own-thread half
 is bounded by RLS. `todos` is readable by every active account — `read todos`
-uses `dovis_is_active()` with no author dimension — so a queue delta discloses
-nothing an assistant cannot already see on screen.
+uses `dovis_is_active()` with no author dimension — so a queue delta of titles
+and states discloses nothing an assistant cannot already see on screen.
 
 **The copy must not promise mail it will never show.** A recap that prints an
 "Email" heading with nothing under it asserts a quiet mailbox rather than an
-absent capability. If a scope line is needed it should describe what the recap
-does cover, and it should be written after the read question is answered, not
-before it.
+absent capability. Now that the read question is answered, the assistant scope
+line can finally be written: it describes the queue and their own threads, and
+names nothing else. **`recap.ahead` is part of that promise and must not render
+on an assistant's recap**: there is no calendar in that run by construction, so a
+line reading "Plus anything scheduled in the next 7 days" above it claims a
+horizon nothing looked at.
 
 ### Injection from summarised mail
 
@@ -943,6 +1218,12 @@ mailbox on the full toolset, and so does Telegram. A read-only recap route bound
 the recap turn and nothing wider. It is worth having because Aaron asked for that
 one turn to be structurally incapable of acting — not because it closes a door
 that is otherwise open.
+
+**The structured result is not a containment boundary either, and must not be
+read as one.** `meta.result` decides which sentence the dashboard renders; it
+does not vouch for `content`. A `result: "success"` on a reply whose prose was
+shaped by a hostile email is still hostile prose, rendered as escaped text. The
+result gates the *marks*, not the *words*.
 
 On rendering, the honest position is that the repo is already correct and should
 stay that way. There is no markdown renderer, no sanitizer and no linkifier in
@@ -965,21 +1246,30 @@ timestamp either.
 
 So the queue half of a recap has two halves of its own.
 
-**Windowed, against the mark:** genuinely new proposals (`created_at`), approvals
-(`confirmed_at`), completions (`completed_at`).
+**Windowed, against the floor:** genuinely new proposals (`created_at`),
+approvals (`confirmed_at`), completions (`completed_at`).
 
 **Unconditional, by current state, regardless of the window:** open `proposed`
 items, `modifying` items, `failed` items, rows sitting in `executing` long after
-a run should have finished, open items carrying `priority = 'high'`, and — see
-below — upcoming meetings. These are reported every time until they are dealt
-with. Time-windowing a failure would make a real, unaddressed failure vanish from
-the second recap, which is worse than repeating it.
+a run should have finished, open items carrying `priority = 'high'`, and the next
+seven days of meetings. These are reported every time until they are dealt with.
+Time-windowing a failure would make a real, unaddressed failure vanish from the
+second recap, which is worse than repeating it.
 
 **That repetition is a deliberate product behaviour, not a mitigation.** It means
 the boss reads the same unresolved failure every morning until he acts on it.
 That is the intent — an unaddressed failure that stops being mentioned has been
 hidden, not resolved — but it is the kind of thing that reads as a bug on day
 three, so it is stated here rather than buried in a table.
+
+**Decided 2026-09-05: there is no global "I'm caught up, stop telling me"
+control**, which was open question 11. A dismiss button would be a second writer
+with different semantics — *I have read this* is not *this is resolved* — and one
+button that silences a real failure is the exact opposite of what the
+unconditional half exists for. Successful recap generation moves `last_seen_at`,
+and nothing else does. A per-category snooze may be considered later; if it is,
+it needs columns of its own, because a mark meaning *reported* and a mark meaning
+*muted* must never be the same number.
 
 **`todos.priority` is where "anything urgent" comes from, and it already
 exists.** `schema.sql` declares
@@ -993,19 +1283,13 @@ them unconditionally, for the same reason failures are unconditional: an
 unaddressed urgent item that stops being mentioned has been hidden. No migration
 is needed; the column is there.
 
-**Upcoming meetings are forward-looking and cannot be a delta.** Aaron asked for
-"calendar changes *and* upcoming meetings", and every other mechanism in this
-section is a comparison against `last_seen_at`. A recap run five minutes after
-the last one has no calendar *changes* and must still say what is coming. So
-upcoming meetings sit in the unconditional half with a fixed forward horizon,
-asked for explicitly on every run. **The recommendation is the next 24 hours, and
-it is a recommendation rather than a settled number**: 24 hours keeps a daily
-recap tight, and it is wrong for a boss who wants Monday's recap to warn him
-about Wednesday's board meeting. It is the same shape of product-visible span as
-the first-run window, so it is folded into open question 1 rather than decided
-here. Since the reply is prose (open question 5), the separation between *what
-changed* and *what is coming* is Dovis's to make in its own words; the route can
-only ask for it, and this design should not pretend otherwise.
+**Upcoming meetings are forward-looking and cannot be a delta**, which is why
+they sit in the unconditional half with the fixed seven-day horizon decided
+above. A recap run five minutes after the last one has no calendar *changes* and
+must still say what is coming. The route asks for that horizon explicitly on
+every run. The separation between *what changed* and *what is coming* is Dovis's
+to make in its own prose: `meta.result` says whether the run completed, not how
+it organised its paragraphs, and this design should not pretend otherwise.
 
 **Rejections and modifications currently fall through both halves, and that is a
 real gap.** A rejection is a decision — arguably the most informative one in this
@@ -1056,9 +1340,10 @@ alter table public.todos alter column created_at set not null;
 **`todos` records no actor.** Nothing writes who pressed Confirm, and an
 assistant with `can_modify` uses the same route. The recap can say *"three things
 were approved"*. It cannot say *"you approved three things"*. If attribution is
-wanted, that is an actor column and a separate decision.
+wanted, that is an actor column and a separate decision, and it is deliberately
+not folded into this work.
 
-### Unresolved conversations
+### Unresolved conversations — decided 2026-09-05
 
 The earlier draft listed these among the contents and never said what one is.
 
@@ -1070,38 +1355,65 @@ narrow definition on purpose: any looser one ("a thread that trailed off") is
 unfalsifiable, and every finished conversation ends with a `dovis` row, so
 without the role test the predicate matches nothing or everything.
 
-**Whose unresolved threads appear in the owner's recap is a product decision with
-a privacy edge, and it is Aaron's.** RLS lets the owner read every assistant's
-conversations, so a naive query pulls an assistant's half-finished question into
-the boss's morning summary. The recommendation is **no** — scope the owner's
-unresolved list to `author_id = <owner>` — because the parent document's own
-reasoning applies directly: an assistant is told they are visible precisely
-because surprise visibility is a trap, and *auditable on inspection* is a
-materially different arrangement from *pushed into the principal's daily
-briefing*. Recorded as an open question rather than settled.
+**The owner's recap does not include assistants' unfinished conversations.** That
+was open question 10, and Aaron's answer is no. RLS would permit it — the owner
+can read every assistant's conversations — so this is a deliberate narrowing in
+the query rather than something the database prevents: `author_id = <the caller>`
+on every account, the owner's included. The parent document's own reasoning is
+why. An assistant is told they are visible precisely because surprise visibility
+is a trap, and *auditable on inspection* is a materially different arrangement
+from *pushed into the principal's daily briefing*. Assistants' conversations stay
+reachable exactly where they already are: the collapsed **Assistants** folder in
+the owner's conversation list, which the owner opens deliberately.
+
+Because this is a query narrowing rather than a policy, it is the kind of rule
+that regresses quietly — a later "why not show everything the owner can read?"
+would look like a simplification. The check is one line of test and it belongs
+with the route: an owner whose assistant has an unanswered turn gets a recap that
+does not mention it.
 
 ### UI states, and the strings
 
 The recap is a chat turn, so most of what the reader sees is a `messages` row
-Hermes wrote. The dashboard owns the trigger, the period header, and the states
-where no message exists yet.
+Hermes wrote. The dashboard owns the trigger, the period header, the two empty
+messages, and the states where no reply exists yet.
 
 | State | What is on screen |
 |---|---|
-| Idle | The quick action in the chat's action row. Not in the Danger zone, not in the header. |
+| Idle, never run | The quick action in the chat's action row, plus `recap.neverRun`. Chosen by `last_scan_at === null`, **after the bootstrap reconciliation has run** — that column means *no recap completed* rather than *no confirmation completed* only because the reconciliation keeps it true. Not in the Danger zone, not in the header. |
+| Idle, run before | The quick action, plus `recap.sinceDate` with `last_seen_at`. |
 | Working | The user's turn is in the thread; a pending Dovis bubble with `recap.working`. The trigger is `disabled` while in flight, matching `queue.tsx` and `refresh-control.tsx`. |
-| No reply yet | After **90 seconds**, refetch the thread once. If still nothing: `recap.noReplyYet` plus `recap.checkAgain`. The mark has not moved. |
+| Delivered — success | An ordinary Dovis bubble rendering `content`, with `recap.sinceDate` (or `recap.sinceFirst`) above it — and `recap.ahead` **only when the run actually had calendar read**: never on an assistant's recap, never on the no-calendar fallback of open question 1. Both marks advanced. |
+| Delivered — empty | `recap.nothingNew`, interpolating the `last_scan_at` the confirmation route just returned. Rendered from `meta.result`, not from `content`. Both marks advanced. |
+| Delivered — error | `recap.runFailed` plus `recap.retry`. **Neither mark advanced**, and the next recap re-covers the period. Never either empty message. |
+| No reply yet | After **90 seconds**, refetch the thread once. If still nothing: `recap.noReplyYet` plus `recap.checkAgain`. Neither mark has moved. |
 | Failed to send | The POST itself failed — auth, HMAC timestamp outside ±300s, box unreachable. `recap.failed` plus `recap.retry`. Nothing was read and nothing was marked. |
 | Backend not configured | `/api/recap` answers 503 with `reason: "hermes-unconfigured"`, and only that reason renders `recap.unavailable`. |
-| Delivered | An ordinary Dovis message, with `recap.sinceDate` (or `recap.sinceFirst`) above it. |
-| Demo | Open question 8. The table deliberately does not settle it. |
+| Demo | The trigger is visible and works, and everything it produces is labelled a sample. See "Demo mode" below. |
 
 **90 seconds, and why that number.** The HMAC timestamp window is ±300 seconds,
 so a run that has produced nothing well inside that is either slow or dead and
 the UI cannot tell which; and a mail-and-calendar summarisation on 4GB / 2 vCPU
-is tens of seconds, not seconds. It is a **UI timeout only**: the mark never
-advances on a timeout, and a reply that lands at 200 seconds still arrives over
-Realtime and still advances the mark when it does.
+is tens of seconds, not seconds. It is a **UI timeout only**: no mark advances on
+a timeout, and a reply that lands at 200 seconds still arrives over Realtime,
+still gets confirmed, and still advances the marks when it does — and if the
+socket was down for all of it, the reconciliation on the next thread load
+confirms it instead.
+
+**The two empty messages are what the second column is for, and they are now
+sentences the dashboard is entitled to say.** An earlier draft recommended
+against a client-rendered empty state, on the grounds that "nothing changed since
+your last review" is a claim only a run that actually looked can make, and the
+dashboard could not tell *looked and found nothing* from *never looked*. **Aaron
+answered that on 2026-09-05: support the empty state, and distinguish the two.**
+The structured result is what makes it honest rather than a guess —
+`meta.result === "empty"` is a run reporting that it looked, so `recap.nothingNew`
+restates something the run said instead of inventing it. And
+`last_scan_at === null` is a fact about this account's history, not a claim about
+a mailbox. The failure the old recommendation feared is now impossible in the
+direction that mattered: **an `error` renders `recap.runFailed`, never
+`recap.nothingNew`**, because that sentence is gated on a column an errored run
+cannot move.
 
 **The "backend not configured" state needs something to detect, and today there
 is nothing.** `isDemoMode` in `src/lib/config.ts` is `!SUPABASE_URL ||
@@ -1116,18 +1428,6 @@ is the nastiest half-state"). The UI, though, should not fetch `/api/health` to
 decide what to render; it distinguishes *unavailable* from *failed* by the
 response `/api/recap` gives it, which is the only source that actually knows.
 
-**Whether there is a client-rendered empty state is Aaron's call, not this
-document's.** He listed loading, empty, error and retry explicitly. The
-recommendation here is **no empty state**: "Nothing changed since your last
-review" is a claim only a run that actually looked can make, and the dashboard
-cannot distinguish *looked and found nothing* from *never looked*, so an empty
-recap should be Dovis saying so in its own reply. The dashboard's near-empty
-states would then all be about transport — no reply yet, could not reach the box
-— and never about content. But that reverses an explicit instruction, and it sits
-uneasily beside open question 5: if the reply is prose, the empty-versus-failed
-distinction lives entirely in Dovis's words and **cannot be enforced from this
-side at all**. Recorded as a question.
-
 ```ts
 recap: {
   quickAction: "Catch me up",
@@ -1139,12 +1439,20 @@ recap: {
   triggers:     ["catch me up", "what did i miss"],
   sinceDate:    "Since your last review — {when}",
   sinceFirst:   "No previous review — since {when}",
+  // Rendered only when the run had calendar read. Never for an assistant.
+  ahead:        "Plus anything scheduled in the next {days} days",
   working:      "Dovis is catching you up",
+  nothingNew:   "Checked {when} — nothing new.",
+  neverRun:     "No recap has been generated yet.",
+  runFailed:    "Dovis couldn't finish this recap, so nothing has been marked as reviewed.",
   noReplyYet:   "No reply yet. The run may still be going.",
   checkAgain:   "Check again",
   failed:       "Couldn't reach Dovis. Nothing was read and nothing was marked.",
   retry:        "Try again",
-  unavailable:  "Catch me up needs a real Dovis box. It does nothing on the demo.",
+  unavailable:  "Catch me up needs a Dovis box, and this deployment has none configured.",
+  sampleTag:    "Sample",
+  sampleHeader: "Sample recap — invented, and covering no real period",
+  timesIn:      "Times shown in {zone}",
 },
 ```
 
@@ -1157,12 +1465,20 @@ recap: {
   triggers:     ["補進度", "幫我補進度", "我錯過了什麼", "有什麼我漏掉的"],
   sinceDate:    "自上次檢視以來——{when}",
   sinceFirst:   "沒有上次檢視紀錄——自 {when} 起",
+  // 只有實際讀得到行事曆的那一次執行才會顯示；助理的整理永遠不顯示。
+  ahead:        "另外加上未來 {days} 天的行程",
   working:      "Dovis 正在幫你整理",
+  nothingNew:   "已在 {when} 檢查過，沒有新的變動。",
+  neverRun:     "還沒有產生過任何進度整理。",
+  runFailed:    "Dovis 沒能完成這次整理，進度標記維持不變。",
   noReplyYet:   "還沒有回覆，執行可能還在進行中。",
   checkAgain:   "再看一次",
   failed:       "無法連線到 Dovis。沒有讀取任何內容，也沒有更新進度標記。",
   retry:        "重試",
-  unavailable:  "補進度需要真正的 Dovis 主機，示範站台不會有。",
+  unavailable:  "補進度需要連上 Dovis 主機，這個部署尚未設定。",
+  sampleTag:    "範例",
+  sampleHeader: "範例進度整理——內容是虛構的，不對應任何實際期間",
+  timesIn:      "時間以 {zone} 顯示",
 },
 ```
 
@@ -1175,33 +1491,46 @@ normalised turn against the union of every language's list, not just the viewer'
 current one, because the toggle is per-viewer and a boss who switches to English
 mid-session should not lose his Chinese phrases.
 
-Three register corrections against the shipped dictionary. `quickAction` is
+Five register decisions against the shipped dictionary. `quickAction` is
 「補進度」, three characters, because every other action label is two to four
-(`確認` / `修改` / `退回` / `重新整理` / `顯示`) and the earlier
-「幫我補進度」 is a seven-character sentence that will not sit in a row beside
-them — it survives as a *typed* trigger, where sentence length is natural.
-「檢視」 replaces 「查看」 for review, matching `readOnlyHint`:
-「你的帳號可以檢視佇列」. And 「執行可能還在進行中」 replaces 「工作可能還在進行」,
-since 工作 for a model run reads as generic "work" rather than the ordinary
-Taiwan technical register. `checkAgain` is 「再看一次」, which sidesteps both
-檢視 and 重新整理 (already Refresh) rather than overloading either.
+(`確認` / `修改` / `退回` / `重新整理` / `顯示`) and the earlier 「幫我補進度」 is
+a seven-character sentence that will not sit in a row beside them — it survives
+as a *typed* trigger, where sentence length is natural. 「檢視」 replaces
+「查看」 for the boss's review, matching `readOnlyHint`: 「你的帳號可以檢視佇列」.
+**「檢查」 is used for the machine's scan and 「檢視」 for the boss's review, and
+the split is deliberate**, mirroring the English "checked" against "review":
+「已在 {when} 檢查過」 is Dovis reporting that it looked, which is a different act
+from the boss having read the result — and the two marks behind those two
+sentences are different columns. 「執行可能還在進行中」 replaces
+「工作可能還在進行」, since 工作 for a model run reads as generic "work" rather
+than the ordinary Taiwan technical register. And `sampleTag` is 「範例」 rather
+than 「示範」, because 示範 already labels the whole deployment in `demoBanner`
+(「示範資料」); 範例 labels this one artefact inside it, and a reader has to be
+able to tell those two apart at a glance.
+
+**`unavailable` changed in both languages, and the old copy must not survive.**
+It used to read "It does nothing on the demo" / 「示範站台不會有」, which is now
+false: demo mode renders a labelled sample. The string's actual job is the
+half-state — a real deployment, a real database, no Hermes configured — so it
+names the deployment rather than the demo.
 
 Nested under `recap` to match `t.status.*` and `t.action.*`. The
 `export const languages: Record<Lang, Dict> = dict` assertion at the foot of
 `i18n.ts` covers nested shape, so a key added to `en` and forgotten in `zh-TW`
 fails the build rather than rendering `undefined` mid-sentence — which is exactly
-the behaviour wanted for `triggerAriaFirst`, a key that must land in both
-dictionaries or in neither. The assertion does **not** check that `triggers` is
-non-empty — `string[]` satisfies the type when empty — so one unit test asserting
-every language's `triggers[0]` exists is worth the three lines, since an empty
-array silently disables typed triggering for that language and nothing else would
-notice.
+the behaviour wanted for `triggerAriaFirst`, `ahead`, `nothingNew`, `neverRun`,
+`runFailed`, `sampleTag`, `sampleHeader` and `timesIn`, eight keys that must land
+in both dictionaries or in neither. The assertion does **not** check that
+`triggers` is non-empty — `string[]` satisfies the type when empty — so one unit
+test asserting every language's `triggers[0]` exists is worth the three lines,
+since an empty array silently disables typed triggering for that language and
+nothing else would notice.
 
-`{when}` interpolates with `.replace("{when}", …)`, the same idiom `{n}` already
-uses in `waitingHeadline`. Both first-run and returning copy take the same slot
-on purpose: whatever the default first window turns out to be, the header states
-the window that was actually used and cannot claim a period the run did not
-cover.
+`{when}`, `{zone}` and `{days}` interpolate with `.replace("{when}", …)`, the
+same idiom `{n}` already uses in `waitingHeadline`. Both first-run and returning
+copy take the same slot on purpose: whatever the first window is set to, the
+header states the window that was actually used and cannot claim a period the run
+did not cover.
 
 Format with **`toLocaleString`**, not `toLocaleDateString`. `page.tsx` uses
 `toLocaleDateString(lang === "en" ? "en-GB" : "zh-TW", { weekday, day, month })`
@@ -1210,17 +1539,20 @@ it demonstrates nothing about formatting a time through that call. Time options
 do happen to survive `toLocaleDateString`, but only through an ECMA-402 corner,
 and it reads as a mistake to the next maintainer. Use the right call, keep the
 `en-GB` / `zh-TW` choice (which gives "3 September" rather than "September 3"),
-add `hourCycle: "h23"` so zh-TW renders 09:20 rather than 上午09:20, and
-**include the year unconditionally**. The mark can be months old on a box that
-has been running a while — the exact scenario open question 1 turns on — and a
-conditional year is a branch that is wrong for eleven months of testing and right
-in the twelfth.
+add `hourCycle: "h23"` so zh-TW renders 09:20 rather than 上午09:20, **pass
+`timeZone` explicitly** per the timezone decision above, and **include the year
+unconditionally**. The mark can be months old on a box that has been running a
+while, and a conditional year is a branch that is wrong for eleven months of
+testing and right in the twelfth.
 
 One honest gap: the chrome follows the viewer's toggle, but the recap **body**
 comes from Hermes, whose default language is set on the box. A 繁中 viewer can
-get Chinese headings around English prose. The fix is for `/api/recap` to forward
-the viewer's `lang` as a prompt hint — it selects a prompt, not a toolset, so the
-route binding is untouched. Worth confirming rather than assuming.
+get Chinese headings around English prose. The two dashboard-rendered outcomes —
+`empty` and `error` — escape this entirely, because they are dictionary strings
+rather than model output; only `success` carries the risk. The fix is for
+`/api/recap` to forward the viewer's `lang` as a prompt hint — it selects a
+prompt, not a toolset, so the route binding is untouched. Worth confirming rather
+than assuming.
 
 ### Accessibility
 
@@ -1235,18 +1567,25 @@ but not `StaleBanner`'s mount behaviour: it early-returns null
 (`if (pendingCount === 0 && !degraded) return null;`), so its region enters the
 DOM already holding its text, and a live region registered together with its
 content commonly announces nothing at all. The recap slot renders empty on thread
-load and is never conditionally returned, so the pending bubble and the reply
-that replaces it are both *mutations inside an already-registered region*, which
-is the thing that actually gets announced.
+load and is never conditionally returned, so the pending bubble and whatever
+replaces it are both *mutations inside an already-registered region*, which is
+the thing that actually gets announced.
 
-That matters twice over, because the reply is the whole point. If the Dovis reply
-renders in the transcript proper for layout reasons rather than inside the slot,
-then the pending bubble's *removal* is all that happens to the region — and
+That matters twice over, because the outcome is the whole point. If the Dovis
+reply renders in the transcript proper for layout reasons rather than inside the
+slot, then the pending bubble's *removal* is all that happens to the region — and
 removal is not announced under the default `aria-relevant="additions text"`, so
 the asynchronous arrival this subsection exists to handle reaches nobody. Either
-keep the reply inside the persistent slot, or keep the slot and write a short
-announcement into it when the row lands (`recap.sinceDate`, or the reply's first
-line) rather than trusting the transcript insertion to be noticed.
+keep the outcome inside the persistent slot, or keep the slot and write a short
+announcement into it when the run resolves.
+
+**All four outcomes must announce, not only the successful one.** `success`
+announces `recap.sinceDate` or the reply's first line; `empty` announces
+`recap.nothingNew`; `error` announces `recap.runFailed`; the 90-second timeout
+announces `recap.noReplyYet`. A screen-reader user who hears nothing after an
+errored run is left in the worst state this feature can produce — believing a
+recap arrived and was empty — which is the same conflation Aaron's decision
+forbids on screen, arriving through the audio channel instead.
 
 The region is the tail slot alone rather than the whole transcript — but not for
 the reason the earlier draft gave. Content present when a region is registered is
@@ -1257,10 +1596,10 @@ pagination, a refetch, an ordinary re-render — would be announced.
 **The trigger's accessible name is a full sentence, its visible label is a
 word.** `RefreshButton` already does this — `aria-label={label}` carries
 "Reconnecting — this may be out of date" while the visible text stays "Refresh".
-So the recap trigger renders `recap.quickAction` and carries
-`recap.triggerAria` with the period interpolated: "Catch me up on everything
-since your last review, 3 September 2026, 09:20". That is a real string in both
-dictionaries above, not a repetition of the visible label.
+So the recap trigger renders `recap.quickAction` and carries `recap.triggerAria`
+with the period interpolated: "Catch me up on everything since your last review,
+5 September 2026, 09:20". That is a real string in both dictionaries above, not a
+repetition of the visible label.
 
 **And it has a first-run twin, selected by the same test as the header.**
 `recap.triggerAriaFirst` is used whenever `last_seen_at` is NULL — the same NULL
@@ -1280,7 +1619,7 @@ and the inserted message come from separate state updates or separate render
 passes, which is the ordinary case. The region is the announcer and is never
 marked busy. Put `aria-busy` on the trigger, alongside the `disabled` it already
 gets. If it is ever wanted on the region itself, the constraint is that it must
-go false in the *same* render commit that inserts the reply — both derived from
+go false in the *same* render commit that inserts the outcome — both derived from
 one piece of state — and that is a constraint worth avoiding rather than
 documenting.
 
@@ -1300,7 +1639,8 @@ already honours `prefers-reduced-motion` per the parent document.
 
 **The period header is text in the DOM, not a `title` attribute.** It is the
 claim about what the recap covers, so it must be readable by everything that
-reads the page, not only by a hovering mouse.
+reads the page, not only by a hovering mouse. The same rule governs
+`recap.sampleTag`, for the same reason and with more at stake.
 
 ### Responsive, theme, and how it is verified
 
@@ -1309,67 +1649,133 @@ Also absent from the earlier draft, also explicit in the ask.
 The trigger sits in the chat's action row and follows the shipped split: the
 visible label may hide below `sm` the way `RefreshButton`'s does
 (`hidden sm:inline`), because the `aria-label` carries the full sentence
-regardless. The period header **wraps rather than truncates** at 375 — a date
-cut off by an ellipsis is worse than a date on two lines, since the whole point
-of the line is the exact period.
+regardless. The period header **wraps rather than truncates** at 375 — a date cut
+off by an ellipsis is worse than a date on two lines, since the whole point of
+the line is the exact period. `recap.ahead`, when it renders at all, sits under
+it as its own line rather than being appended, so the forward claim is not the
+half that gets clipped.
 
 **No new visual language.** The trigger uses the one sparkle identity the parent
 document requires of every chat entry point; the recap reply is an ordinary Dovis
 bubble; the period header uses existing muted-foreground and border tokens. Both
 themes are real here — `chrome.tsx` ships a Light/Dark toggle with `aria-pressed`
-on both and `next-themes` is a dependency, so this is not a dark-only product and
-the header must be checked in both. Per the workspace rule the visual direction
-for this surface goes through `stitch-to-shadcn` with the rest of the chat in
-build-order step 4; the recap adds one button and one line of header, so it
-inherits that pass rather than needing one of its own.
+on both and `next-themes` is a dependency, so this is not a dark-only product,
+and the header and the sample tag must both be checked in each. Per the workspace
+rule the visual direction for this surface goes through `stitch-to-shadcn` with
+the rest of the chat in build-order step 4; the recap adds one button, two lines
+of header and one inline tag, so it inherits that pass rather than needing one of
+its own.
 
 Verification, mirroring the parent document's step 5 rather than inventing a
 different bar:
 
-- `npx tsc --noEmit` and `npm run build`.
-- Screenshots at **375 and 1440, in both languages**, of idle, working, no-reply
-  and delivered.
+- `npx tsc --noEmit` and `npm run build`. The three new `Profile` fields must
+  break `src/lib/demo-data.ts` first; a green build before the fixtures are
+  updated means the type change was never made.
+- Screenshots at **375 and 1440, in both languages**, of idle-never-run,
+  idle-with-a-mark, working, no-reply, delivered-success, delivered-empty and
+  delivered-error.
 - **Run two recaps back to back and confirm the second header shows the first
   run's window-open time.** This is the regression check for the stale-chip bug
   above, and it fails against today's provider.
+- **Let a reply land with the tab shut (or the socket closed), then reload the
+  thread.** Confirm the reconciliation confirms it on that load, that both
+  columns move, and that the idle line never renders `recap.neverRun` above a
+  recap reply that is on screen.
+- **Type an ordinary question into the recap thread while a run is in flight,
+  then let the reply land.** Confirm `last_seen_at` takes the *run's* turn and
+  not the typed one — and, on the adjacency fallback, that the confirmation is
+  refused rather than guessed.
+- **Force `meta.result` to `error` on a reply and confirm both columns are
+  unchanged in Postgres afterwards**, and that the surface renders
+  `recap.runFailed` and never `recap.nothingNew`. This is the single check the
+  structured result exists for.
+- **Force `empty` and confirm `last_scan_at` moved, and that the rendered message
+  is `recap.nothingNew` with that timestamp in it.** The pair of columns is only
+  worth having if this is true.
 - Type each phrase in `recap.triggers` for both languages and confirm each one
   produces the same request as the button, and that a near-miss
   (*"catch me up on the Chen thread"*) does **not**.
-- An assistant account confirming its recap contains no mail and no calendar.
-- `curl -s https://aaron-dovis-dashboard.vercel.app/api/health` — `demo:false`
-  is the live client instance, and once the chat PR lands, `hermes:true` is the
-  one that says this feature can run at all.
+- An assistant account confirming its recap contains no mail, no calendar and no
+  draft bodies — and that `recap.ahead` does not render above it; and an owner
+  account confirming its recap does not mention an assistant's unanswered turn.
+- Demo mode at both widths: the trigger is present, the sample is labelled in the
+  bubble and in the header slot, and no timestamp anywhere claims a real period.
+- `curl -sL https://aaron-dovis-dashboard.vercel.app/api/health` — it 307s to
+  `dovis.jieren.my.id`, and `demo:false` is the live client instance. Do **not**
+  read its `google` flag as a statement about the box: it reports the
+  *dashboard's* OAuth client config, and it is `false` today. For the credential
+  itself, `/api/google/status` as the owner, whose `token` field reports what is
+  on disk. And once the chat PR lands, `hermes:true` is the one that says this
+  feature can run at all.
 
-### Demo mode, and not fabricating
+### Demo mode — decided 2026-09-05
 
-Demo mode has no Supabase client, no session, no `messages` and no Hermes. The
-chat as a whole has no demo behaviour designed yet, and the recap's is a subset
-of that answer — it should be decided when the chat is built, not here. The state
-table above deliberately leaves the row open rather than pre-empting it.
+Demo mode has no Supabase client, no session, no `messages` and no Hermes.
+**Aaron's decision: keep the trigger visible, and label what it produces clearly
+as a sample.** That reverses this document's earlier position, which ruled a
+fixture recap out entirely — and the earlier text argued it badly, treating
+"labelled sample" and "fabrication presented as real" as the same thing. They are
+not. The rule that survives, unchanged and absolute, is the second one: **nothing
+invented may ever be presented as real.** A sample that says so, in the place
+where a real recap would state its period, is not a violation of that rule; it is
+that rule enforced in copy.
 
-What is settled now is the rule: **the recap must never synthesise.** No fixture
-recap presented as real, and in particular no client-rendered "you're all caught
-up", because that sentence is a claim about a mailbox nobody read. If a labelled
-sample is wanted on the public showcase, it is a deliberate product decision and
-it sits closest to this line of anything in the feature — Aaron's call, recorded
-below.
+The showcase deployment is the entire reason demo mode exists — a fresh clone
+with no `.env.local` renders a complete working dashboard on fixtures — and a
+chat whose headline feature does nothing when clicked shows the product as worse
+than it is. `demoTodos`, `demoPayloads` and `demoWidgets` in
+`src/lib/demo-data.ts` already do exactly this for the queue, and they are honest
+because `chrome.tsx` carries `demoBanner` above every page.
 
-The existing precedent argues for restraint rather than simulation:
-`google-connect.tsx` replaces the whole card with one sentence
-(`googleUnavailable`) rather than faking a connected state, and `chrome.tsx`
-already carries `demoBanner` above every page.
+**How a viewer tells a sample from a real recap at a glance**, three signals, in
+descending order of how hard they are to lose:
+
+1. **The header slot denies a period instead of stating one.** Where a real recap
+   renders `recap.sinceDate` with a date, the sample renders `recap.sampleHeader`
+   — "Sample recap — invented, and covering no real period". That line's only job
+   is to say what the recap covers, so a sample that leaves it blank or borrows a
+   real-looking date is the failure mode. It is also the line a screenshot crops
+   last, because it sits directly above the prose.
+2. **`recap.sampleTag` renders inside the reply bubble**, in the same DOM node as
+   the prose — not a tooltip, not a toast, not a border colour. It survives
+   scrolling, screenshotting and copy-and-paste into a chat window, which is how
+   a fabricated recap would actually escape into the world.
+3. **`demoBanner` is already above every page**, and stays.
+
+The fixture itself should read as obviously fictional, the way `demoTodos`
+already does: Stanley Chen and the Q3 budget, not a plausible stranger. A
+`demoRecap` export beside the others — one paragraph, referring to items that
+exist in `demoTodos`, so the sample is internally consistent with the queue on
+screen rather than describing a parallel company.
+
+**The sample moves no mark, and there is nothing for it to move**: demo mode has
+no Supabase client, so `last_seen_at` and `last_scan_at` do not exist for a demo
+viewer at all. Say it anyway, because the next half-state along is a deployment
+with a real database and no Hermes, and there the answer is different.
+
+**The sample is bound to `isDemoMode`, and to nothing else.** `isDemoMode` is
+`!SUPABASE_URL || !SUPABASE_ANON_KEY` — a statement about Supabase only. A real
+deployment with a real database and no Hermes configured is *not* demo mode, gets
+`recap.unavailable`, and must never be shown a sample: invented content in front
+of a boss with a real queue is exactly what the rule forbids. In production the
+recap runs against the real backend, or it says it cannot.
 
 ### Failure modes
 
 | Failure | Observable symptom | Mitigation |
 |---|---|---|
-| Run accepted, reply never lands (Hermes crashed, or the Realtime event was lost while the socket was down) | A pending bubble that never resolves | 90-second wait, then refetch the thread once — the same pattern as `refresh()`. If still nothing, `recap.noReplyYet` with `recap.checkAgain`. Never render an empty recap. The mark does not move. |
+| Run accepted, reply never lands (Hermes crashed, or the Realtime event was lost while the socket was down) | A pending bubble that never resolves | 90-second wait, then refetch the thread once — the same pattern as `refresh()`. If still nothing, `recap.noReplyYet` with `recap.checkAgain`. Never render an empty recap. Neither mark moves. |
+| Reply lands but the browser never sees it | The next recap repeats a period the boss has already read — and, on a first-ever recap, the idle line claims none has ever been generated while one sits on screen | The browser reconciles on the next load of the recap thread: a resulted reply newer than `last_scan_at` is confirmed then, so the marks converge instead of being lost with the tab. Until that load, repetition — the safe direction. Do **not** fix it by advancing on the acknowledgement. |
+| A confirmation pairs a reply with the wrong turn — the boss typed into the recap thread while a run was in flight | A floor that jumped over the run's own window: the silent hole, arriving through mispairing | The pair is never taken from the client. The reply names its originating turn on `meta` and the route rejects anything else; without the echo, adjacency, which refuses rather than guesses. |
 | POST rejected — 401, HMAC timestamp outside ±300s, box down | Immediate error on the trigger | `recap.failed` with `recap.retry`. Nothing was read, nothing was marked. |
-| Reply landed, mark did not advance | The next recap repeats the same period | Benign, and the safe direction. Do **not** fix it by advancing on the acknowledgement. |
-| Mark advanced past a recap nobody saw | A window silently absent from every future recap | The failure that actually matters. Advance only where success is known, only to the window-open stamp, and only with `greatest()` — on both writers, Hermes included. |
-| Triggered twice — button plus typed phrase, or two tabs | Two recaps in the thread | `disabled` while in flight, per the shipped idiom, and `greatest()` keeps the mark sane. Cosmetic. Not worth a lock table. |
-| Google refresh token expired, so mail and calendar are unreadable | A recap that covers less than it appears to — **and, worse, a mark that advanced anyway, so that window of mail is never reported by any future recap** | Only the run knows a source failed. Do not diagnose it from the dashboard: `/api/google/status` is owner-only and reports what is on disk, not whether Hermes could read mail this minute. Gate the mark on a run reporting full source coverage, which needs the structured reply of open question 5. If the reply stays prose, **per-source burn is accepted** and should be stated to Aaron in those words, not softened. |
-| Recap reports a `failed` item once and never again | The boss stops seeing an unaddressed failure | Report `failed`, `proposed`, `modifying`, stalled `executing` and open `priority = 'high'` items by current state, unconditionally, not by window. |
+| The run fails on the box | Without a durable failure row, indistinguishable from a run still in flight | Hermes writes a row carrying `result: "error"` — a requirement, not an assumption. The route refuses to advance either mark and the UI shows `recap.runFailed`. A missing or unrecognised result is treated as `error`. |
+| An error rendered as an empty recap | The boss reads "nothing new" about a mailbox nobody could open | Structurally impossible: `recap.nothingNew` is gated on `meta.result === "empty"` and interpolates `last_scan_at`, a column an errored run cannot move. |
+| A mark advanced past a recap nobody saw | A window silently absent from every future recap | The failure that actually matters. Advance only on `success` or `empty`, only from the window-open stamp of the turn the reply itself names, only with `greatest()`, and only in the one route that writes them. |
+| Triggered twice — button plus typed phrase, or two tabs | Two recaps in the thread, and two confirmations | `disabled` while in flight, per the shipped idiom, and `greatest()` on both columns keeps the marks sane in either arrival order. Cosmetic. Not worth a lock table. |
+| A partially blind run reports `success` (expired Google refresh token) | A recap that covers less than it appears to — **and a floor that advanced anyway, so that window of mail is never reported by any future recap** | Not yet closed. Needs a run that could not read a requested source to report `error`, or a result that names its coverage. Open question 2. Do not try to diagnose it from the dashboard: `/api/google/status` is owner-only and reports what is on disk, not whether Hermes could read mail this minute. |
+| Recap reports a `failed` item once and never again | The boss stops seeing an unaddressed failure | Report `failed`, `proposed`, `modifying`, stalled `executing` and open `priority = 'high'` items by current state, unconditionally, not by window. There is no mute control, by decision. |
+| A sample recap mistaken for a real one | Invented content believed | Three independent signals, per the demo section: the header slot denies a period, `recap.sampleTag` sits inside the bubble, `demoBanner` sits above the page. Bound to `isDemoMode`, never to a missing Hermes. |
 
 The double-trigger row previously leaned on "Hermes' native idempotency". **That
 claim is dropped.** Hermes' answers say idempotency is *supported*, not
@@ -1380,87 +1786,61 @@ its own small piece of work.
 
 ### Open questions — Aaron's calls
 
-1. **First-run window — 24 hours or 7 days — and how far forward do upcoming
-   meetings look?** 24h keeps the first recap readable; 7d is likelier to contain
-   the thing actually missed on a box that has been running a while. The forward
-   horizon is the same decision pointing the other way: 24 hours, 48, or to the
-   end of the working week — 24 keeps a daily recap tight and tells a boss
-   nothing about Wednesday's board meeting. Both are baked into the route, so
-   decide before the migration.
-2. **Can Hermes stamp `profiles.last_seen_at` with a timestamp we supply**, in
-   the same service-role write that inserts the recap reply? This is the
-   load-bearing one. The statement to ask about is
-   `update public.profiles set last_seen_at = greatest(last_seen_at, <the exact
-   value supplied>) where id = <caller>` — "stamp this exact value, and never
-   lower the mark", not "stamp `now()`", which reopens the hole described above.
-   If yes, the mark is correct by construction. If no, the `/api/recap/seen`
-   fallback attests arrival rather than generation and is measurably weaker. Ask
-   the box.
-3. **Can Hermes define a custom read-only toolset**, or only compose the three
-   named built-ins — and **is Aaron willing to add a third route** with a third
-   secret to store and rotate? None of the three built-ins is right for a recap.
-   If custom toolsets are unavailable, the recap ships without mailbox or
-   calendar access, which also removes upcoming meetings.
-4. **Do assistants get mailbox and calendar read tools?** Build-order step 1,
-   still open. The recap forces it, and the terms are: the box holds one Google
-   credential, the owner's, so an assistant recap that reads mail reads the
-   owner's mail with the owner's token.
-5. **Does the recap reply come back as prose, or as something structured?**
-   Everything about reporting a partial read honestly — "I could not reach your
-   mail" — depends on this, and prose is the default. It is more than a
-   presentation question: without a structured signal naming which sources the
-   run actually read, the mark cannot be gated on full source coverage, so a run
-   whose Google token expired advances the mark anyway and burns that window of
-   mail permanently. If it stays prose, the empty-versus-failed distinction lives
-   entirely in Dovis's own words, cannot be enforced from this side, and
-   per-source burn is accepted.
-6. **Does anything reach Supabase when a run fails on the box?** If Hermes writes
-   only successes, the dashboard can never distinguish *failed* from *still
-   running*, and every failure degrades to a timeout. A failure row is worth more
-   than any amount of client-side timeout tuning.
-7. **Whose timezone does the body use?** The header is formatted in the viewer's
-   timezone; "your 3pm meeting" is generated on the VPS. Without an explicit
-   timezone in the payload the two can disagree inside one message.
-8. **What does the trigger do in demo mode** — is it absent, does it render
-   `recap.unavailable`, or is a clearly labelled sample recap acceptable? This
-   sits closest to the do-not-fabricate line, and the state table above leaves
-   all three open rather than quietly ruling two out.
-9. **Is there a client-rendered empty state?** Aaron listed empty as an explicit
-   state; this design recommends removing it, because the dashboard cannot tell
-   *looked and found nothing* from *never looked*. That reverses an instruction,
-   so it is his call rather than a decision made here.
-10. **Does the owner's recap surface assistants' unresolved conversations?** RLS
-    permits it. The recommendation is no — auditable on inspection is not the
-    same arrangement as pushed into the principal's daily briefing — but it is a
-    product decision with a privacy edge, and the parent document's reasoning
-    about telling assistants they are visible applies directly.
-11. **Is there an "I'm caught up, stop telling me" control?** The design above
-    says the mark advances only when a recap is generated. A dismiss button would
-    be a second writer with different semantics and needs a deliberate yes or no.
-12. **Is `/api/payload/[id]` intentionally role-blind?** It calls only
-    `requireProfile()` with no `permissionsFor()` check, so any active account can
-    read any drafted email body by id. The demo copy ("Sees everything, decides
-    nothing") suggests intent. If it is intended, an assistant recap containing
-    queue detail leaks nothing new. If not, it is a live disclosure independent of
-    this feature, and the recap must not widen it.
+Eleven of the previous twelve are gone: Aaron answered ten of them on 2026-09-05
+and they now live in the body above, and `/api/payload/[id]` answered itself when
+the route gained its `can_modify` check. One of the original twelve survives, as
+question 1 below. The other two are new, and both are consequences of answers
+rather than leftovers from before them.
+
+1. **Can Hermes define a custom read-only toolset for `owner-recap`**, or only
+   compose the named built-ins — and **is Aaron willing to add a third route**
+   with a third secret to store and rotate? Fixed-toolsets-per-route is now
+   confirmed as the mechanism; what is unconfirmed is whether a mail-and-calendar
+   read composition, without writes and without outbound web fetch, can be built
+   at all. None of the three built-ins is right on its own. If it cannot be, the
+   recap ships without mailbox or calendar access — which also removes upcoming
+   meetings, and with them the forward half of the seven-day window decided
+   above, and `recap.ahead` with it.
+2. **Does the structured result distinguish a partially blind run from a
+   successful one?** `success | empty | error` gates the marks, which closes the
+   hole for a run that failed outright. It does not by itself say what a run
+   reports when it read the queue but could not open the mailbox. If that is
+   `success`, per-source burn returns exactly as before. The ask is one rule —
+   *a run that could not read a source it was asked to read is an `error`* — or a
+   per-source coverage field on `meta` that the route requires to be complete
+   before it advances the floor.
+3. **Who sets `profiles.timezone`, and when?** The resolution order is decided;
+   the seeding is not. The dashboard cannot read a Google calendar zone itself
+   today, so an empty column means every recap falls through to the
+   browser-resolved last resort until a run comes back naming one. The
+   recommendation is to capture the browser's resolved zone at account creation
+   and let the owner correct it on the Team page, which makes the common case
+   right without asking anybody anything. It is one field on an existing form, so
+   it wants a yes or no rather than a design.
 
 ### Where it sits in the build order
 
 After step 3 of the list above, not before it. Steps 2 and 3 build the tables and
-the transport this feature is a turn inside; the three answers it needs from the
-box — the read-only toolset, who stamps the mark and with what value, and whether
-a failed run writes anything — should be asked at the same time as step 1's
-mailbox question, because they are all questions for the same box and all of them
-change what gets built.
+the transport this feature is a turn inside. The asks that remain for the box —
+the read-only toolset, whether a partially blind run reports `error`, the durable
+failure row, and echoing the turn id back on the reply — should be sent together,
+because they are all questions for the same box and every one of them changes
+what gets built. What is no longer on that list is the stamping contract: **the
+dashboard writes the marks, so Hermes is asked only to accept a profile id and a
+turn id, and to put the result and that turn id on the reply.**
 
 **Send the corrected schema with those questions.** `WEB-CHAT-DESIGN.md` renamed
 the column to `author_id` and explains why; Hermes' integration answers §9 still
-specify `owner_id` on both tables. If Aaron asks the box to write a stamp and
-insert replies without that correction travelling alongside, Hermes will build
-against a column name that does not exist.
+specify `owner_id` on both tables. If Aaron asks the box to insert replies
+without that correction travelling alongside, Hermes will build against a column
+name that does not exist.
 
 The migrations are small and belong with the chat migration rather than a later
-one, so `profiles` and `todos` are each altered once: `profiles.last_seen_at`,
-`todos.decided_at`, the `todos.created_at` not-null fix, and the one-line
-tightening of the `"owner updates"` policy on `profiles` to carry
-`and id <> auth.uid()`, mirroring `"owner deletes"`.
+one, so each table is altered exactly once:
+
+- `profiles.last_seen_at`, `profiles.last_scan_at`, `profiles.timezone`
+- `todos.decided_at`, and the `todos.created_at` not-null fix
+- `messages.meta`, which belongs to the chat migration because that is where
+  `messages` is created
+- the one-line tightening of the `"owner updates"` policy on `profiles` to carry
+  `and id <> auth.uid()`, mirroring `"owner deletes"`
