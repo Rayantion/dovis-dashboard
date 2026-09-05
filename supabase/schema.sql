@@ -105,8 +105,32 @@ create table if not exists public.profiles (
   can_modify            boolean not null default false,
   must_change_password  boolean not null default true,
   created_at            timestamptz not null default now(),
-  last_sign_in_at       timestamptz
+  last_sign_in_at       timestamptz,
+  -- NULL means "not initialised": the account has never told the server which
+  -- language it reads in. The browser seeds it once from its own toggle, after
+  -- which this row is the source of truth and the language follows the person
+  -- between devices instead of living in one browser's localStorage.
+  lang                  text check (lang in ('en','zh-TW'))
 );
+
+/*
+  For databases created before `lang` existed. `create table if not exists`
+  above is a no-op on them, so the column has to arrive separately, and this
+  file is re-run as a whole rather than as a migration chain.
+*/
+alter table public.profiles
+  add column if not exists lang text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'profiles_lang_check'
+  ) then
+    alter table public.profiles
+      add constraint profiles_lang_check check (lang in ('en','zh-TW'));
+  end if;
+end
+$$;
 
 comment on column public.profiles.can_modify is
   'Owner-granted. Lets an assistant confirm, modify and reject. Confirming a '

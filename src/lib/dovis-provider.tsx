@@ -3,6 +3,7 @@
 import * as React from "react";
 import { createClient } from "@/lib/supabase/client";
 import { isDemoMode } from "@/lib/config";
+import { LANG_STORAGE_KEY, useI18n } from "@/lib/i18n";
 import {
   demoProfiles,
   demoPayloads,
@@ -135,6 +136,8 @@ async function post(url: string, body: unknown) {
 }
 
 export function DovisProvider({ children }: { children: React.ReactNode }) {
+  // Safe: ThemeProvider supplies LangContext one level above this in layout.tsx.
+  const { adoptLang, setLang } = useI18n();
   const [ready, setReady] = React.useState(false);
   const [session, setSession] = React.useState<Session | null>(null);
   const [todos, setTodos] = React.useState<Todo[]>([]);
@@ -219,6 +222,45 @@ export function DovisProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [supabase]);
+
+  // ------------------------------------------------------------------ language
+  /*
+    The profile is the source of truth for language; a browser only seeds it.
+
+    This watches `session` rather than living inside `boot()` because a session
+    also arrives through `signIn`, and someone signing in on a borrowed laptop
+    should get their own language rather than whatever the last person left in
+    that browser.
+
+    The ref keeps it to once per mount. Without it, any later change to `session`
+    — a password change rewrites the profile object — would re-adopt and undo a
+    toggle the viewer had just used.
+  */
+  const languageSynced = React.useRef(false);
+  React.useEffect(() => {
+    if (isDemoMode || !session || languageSynced.current) return;
+    languageSynced.current = true;
+
+    const saved = session.profile.lang;
+    if (saved) {
+      adoptLang(saved);
+      return;
+    }
+
+    /*
+      Never initialised, so this browser's own answer becomes the account's.
+      Read from localStorage rather than from `lang` in context: ThemeProvider
+      adopts the stored value in its own effect, which has not necessarily run
+      yet, so the context value here can still be the "en" default — and seeding
+      a Chinese reader's account with English would be a silent wrong answer
+      that then follows them to every other device.
+    */
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(LANG_STORAGE_KEY)
+        : null;
+    setLang(stored === "zh-TW" || stored === "en" ? stored : "en");
+  }, [session, adoptLang, setLang]);
 
   // ------------------------------------------------------------------ refresh
   const refresh = React.useCallback(async () => {
@@ -512,6 +554,9 @@ export function DovisProvider({ children }: { children: React.ReactNode }) {
           must_change_password: true,
           created_at: new Date().toISOString(),
           last_sign_in_at: null,
+          // Never initialised: a new account has not told the server what it
+          // reads in, and their first sign-in is what seeds it.
+          lang: null,
         };
         setProfiles((prev) => [...prev, profile]);
         return { tempPassword };

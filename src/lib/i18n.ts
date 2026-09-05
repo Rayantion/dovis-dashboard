@@ -223,9 +223,18 @@ export const languages: Record<Lang, Dict> = dict;
 
 export const LangContext = createContext<{
   lang: Lang;
+  /** The viewer chose this. Persists to their profile. */
   setLang: (l: Lang) => void;
+  /**
+   * The profile already said this. Applies it locally and does NOT write back.
+   *
+   * Separate from `setLang` on purpose: adopting the server's answer through the
+   * setter would POST it straight back, which is a pointless round trip on every
+   * sign-in and a race against a change made on another device in between.
+   */
+  adoptLang: (l: Lang) => void;
   t: Dict;
-}>({ lang: "en", setLang: () => {}, t: dict.en });
+}>({ lang: "en", setLang: () => {}, adoptLang: () => {}, t: dict.en });
 
 export function useI18n() {
   return useContext(LangContext);

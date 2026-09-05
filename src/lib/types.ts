@@ -4,6 +4,11 @@
   drifts from them will let you write code the database then rejects at runtime.
 */
 
+// Type-only, so it is erased at compile time and this module stays free of any
+// runtime import — `i18n.ts` is a client module and this file is read by server
+// routes too. One definition of the pair, matching one CHECK constraint.
+import type { Lang } from "@/lib/i18n";
+
 /** The queue lifecycle. `executing` is a claim the executor sets BEFORE acting. */
 export type TodoStatus =
   | "proposed"
@@ -96,6 +101,15 @@ export interface Profile {
   must_change_password: boolean;
   created_at: string;
   last_sign_in_at: string | null;
+  /**
+   * The language this account reads in, or null when it has never been set.
+   *
+   * Null is not a default of English — it means nobody has said, so the browser
+   * seeds it once from its own toggle. After that this is authoritative, which
+   * is what lets the choice follow a person to a second device and what gives
+   * the server a language it can act on rather than one it has to be told.
+   */
+  lang: Lang | null;
 }
 
 /** What the UI is allowed to render for the current session. */

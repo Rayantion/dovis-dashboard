@@ -315,6 +315,7 @@ export const demoProfiles: Profile[] = [
     must_change_password: false,
     created_at: minutesAgo(60 * 24 * 90),
     last_sign_in_at: minutesAgo(3),
+    lang: "en",
   },
   {
     id: "p2",
@@ -327,6 +328,7 @@ export const demoProfiles: Profile[] = [
     must_change_password: false,
     created_at: minutesAgo(60 * 24 * 12),
     last_sign_in_at: minutesAgo(95),
+    lang: "zh-TW",
   },
   {
     id: "p3",
@@ -339,5 +341,8 @@ export const demoProfiles: Profile[] = [
     must_change_password: true,
     created_at: minutesAgo(60 * 24 * 2),
     last_sign_in_at: null,
+    // Never signed in, so nothing has seeded a language yet. The two facts
+    // belong together: the first sign-in is what writes this.
+    lang: null,
   },
 ];
