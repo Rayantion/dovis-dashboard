@@ -4,6 +4,7 @@ import * as React from "react";
 import { ChevronDown, Mail, Hand, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { AttentionBlock } from "@/components/attention";
+import { EmailFacts } from "@/components/email-facts";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,12 +18,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n, type Lang } from "@/lib/i18n";
 import { useDovis } from "@/lib/dovis-provider";
-import type {
-  DraftEmailPayload,
-  ManualPayload,
-  Todo,
-  TodoPayload,
-  TodoStatus,
+import {
+  parseAttachments,
+  parseFlagCodes,
+  parseLinks,
+  type DraftEmailPayload,
+  type ManualPayload,
+  type Todo,
+  type TodoPayload,
+  type TodoStatus,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -414,9 +418,21 @@ const SOURCE_FIELDS = [
   { key: "email_id", label: "sourceMessageRef" },
 ] as const;
 
+/*
+  The three email-facts keys are labelled because EmailFacts below renders every
+  one of them properly — a code as a named chip, an attachment as a row, a link
+  by its parsed host. Leaving them out would dump the same data a second time as
+  raw JSON in the sweep, which teaches the reader that the sweep is noise.
+
+  An unrecognised flag CODE is the different case and is handled separately: it
+  renders nothing as a flag, and is put back into the sweep by hand.
+*/
 const LABELLED_KEYS = new Set<string>([
   "task",
   "detail",
+  "email_flags",
+  "attachments",
+  "links",
   ...SOURCE_FIELDS.map((f) => f.key),
 ]);
 
@@ -426,14 +442,35 @@ const LABELLED_KEYS = new Set<string>([
  *
  * Everything below came out of somebody else's mail, so it is rendered exactly the
  * way the draft subject and body beside it are — as text React escapes. No markup
- * path, no linkification, and no "view original": `/api/google/*` is connect,
- * callback and status only, so no route on this app can fetch a message.
+ * path, no auto-linkification of prose, and no "view original": `/api/google/*` is
+ * connect, callback and status only, so no route on this app can fetch a message.
+ *
+ * The one amendment to that: a link the box extracted into `links` can become a
+ * real anchor, but only after it passes `checkLink()` AND the reader presses a
+ * control saying so. See EmailFacts — nothing on this card is clickable because
+ * a message contained it.
  */
 function ManualView({ payload }: { payload: ManualPayload }) {
   const { t, lang } = useI18n();
 
   const task = asText(payload.task);
   const detail = asText(payload.detail);
+
+  /*
+    Facts about the message this item came out of. All three fields are absent
+    from most payloads and their absence renders as nothing at all — there is no
+    "checked, nothing found" line, because this build has no analysis-state
+    field and therefore cannot tell that apart from "never checked". A
+    reassuring sentence across that gap would be the one claim this surface must
+    never make.
+
+    Nothing gates on `todos.source`. It is unconstrained `text` in the schema,
+    so it guarantees nothing, and the presence of the fields is the better
+    signal anyway: only mail carries MIME parts and a Reply-To header.
+  */
+  const flags = parseFlagCodes(payload.email_flags);
+  const attachments = parseAttachments(payload.attachments);
+  const links = parseLinks(payload.links);
 
   const source = SOURCE_FIELDS.map((f) => ({
     label: t[f.label],
@@ -461,7 +498,24 @@ function ManualView({ payload }: { payload: ManualPayload }) {
     }))
     .filter((row) => row.value.length > 0);
 
-  if (!task && !detail && source.length === 0 && extras.length === 0)
+  /*
+    A flag code this build has no label for renders NOTHING as a flag. It has no
+    dictionary entry, so the alternatives are a styled chip with no words — a
+    warning that cannot say what it is warning about — or printing the code
+    itself, which hands whoever influenced the analyser a byline in the place a
+    warning belongs.
+
+    It still arrived, though, so it lands here, under its own key, in the sweep
+    that exists for exactly this: data the reader should see on the day it
+    appears rather than on the day somebody reads the database.
+  */
+  if (flags.unknown.length > 0)
+    extras.push({ key: "email_flags", value: asText(flags.unknown) });
+
+  const hasFacts =
+    flags.known.length > 0 || attachments.length > 0 || links.length > 0;
+
+  if (!task && !detail && source.length === 0 && extras.length === 0 && !hasFacts)
     return <p className="text-xs text-muted-foreground">{t.payloadEmpty}</p>;
 
   return (
@@ -508,6 +562,18 @@ function ManualView({ payload }: { payload: ManualPayload }) {
           </dl>
         </div>
       ) : null}
+
+      {/*
+        After the source email and before the raw sweep, because that is the
+        reading order the decision needs: what the item is, who it came from,
+        what the message itself contained, and only then the keys nobody has a
+        label for.
+      */}
+      <EmailFacts
+        flags={flags.known}
+        attachments={attachments}
+        links={links}
+      />
 
       {extras.length > 0 ? (
         <div className="border-t border-border pt-2">

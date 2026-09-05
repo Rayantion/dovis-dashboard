@@ -4,7 +4,7 @@ import { createContext, useContext } from "react";
 
 // Type-only, so it is erased at compile time and the cycle with types.ts —
 // which imports `Lang` back from here — never exists at runtime.
-import type { AttentionLevel } from "@/lib/types";
+import type { AttentionLevel, EmailFlagCode } from "@/lib/types";
 
 /*
   Bilingual EN / zh-TW, per SOUL.md: "Bilingual English and Traditional Chinese.
@@ -138,6 +138,53 @@ export const dict = {
     // Read aloud before the level, so the block is not just a colour and a word
     // arriving out of nowhere. Never shown.
     attentionLevel: "Attention level",
+    /*
+      What the message CONTAINED. Every string here describes a fact, so every
+      string here states it flat — no "possibly", no "appears to". Hedging a
+      fact is its own dishonesty: "possibly a PDF attachment" teaches the reader
+      to discount the flags that will one day genuinely need discounting.
+
+      Read the whole block for what it never says. Nothing here reports a check
+      passing, nothing calls a message safe, legitimate or verified, and there is
+      no counterpart to `attachmentUnavailable` announcing that an attachment is
+      fine. Silence is the only thing the absence of a flag is allowed to mean:
+      a positive claim would turn every miss into an endorsement by Dovis, on
+      the one message where it mattered.
+    */
+    emailFacts: {
+      heading: "What the message contained",
+      disclaimer:
+        "Read from the message headers and its parts. Facts about what arrived — not a judgement, and not a safety check.",
+      attachments: "Attachments",
+      attachmentUnnamed: "Unnamed file",
+      // The tile beside an image is the shape a thumbnail will occupy. Until
+      // there is a route to fill it, it says so.
+      attachmentNoPreview: "No preview",
+      attachmentCannotOpen:
+        "Cannot be opened from here. Dovis has no route that fetches attachments yet.",
+      attachmentUnavailable:
+        "Dovis saw this attachment and could not record it. Its details may be incomplete.",
+      links: "Links",
+      linkText: "Link text in the message",
+      linkExternal: "External",
+      linkFullAddress: "Full address",
+      linkHostUnreadable: "No readable host",
+      // Two deliberate acts before an anchor exists: this button, then the link.
+      linkArm: "Let me open this",
+      linkOpen: "Open",
+      linkNewTab: "opens in a new tab",
+      linkNeverAuto:
+        "Nothing here opens on its own. Dovis never follows a link because a message asked it to.",
+      linkRejectedScheme:
+        "Not openable: this address does not use http or https.",
+      linkRejectedUserinfo:
+        "Not openable: the text before the @ is a username, and the real destination is what follows it.",
+      linkRejectedIdn:
+        "Not openable: an internationalised host, shown here in its punycode form because the readable spelling can imitate another domain.",
+      linkRejectedUnparseable:
+        "Not openable: this could not be read as a web address.",
+      moreNotShown: "{n} more not shown.",
+    },
   },
   "zh-TW": {
     brand: "Dovis",
@@ -246,6 +293,32 @@ export const dict = {
       "Dovis 判斷每個項目需要你多少注意力。依據的是信件裡的期限、承諾與風險，不是寄件者把話說得多急。",
     attentionNoneNote: "沒有標示的項目代表 Dovis 尚未判斷，不等於沒有問題。",
     attentionLevel: "注意程度",
+    emailFacts: {
+      heading: "這封郵件裡有什麼",
+      disclaimer:
+        "從郵件標頭與各個部分讀到的內容。這些是郵件裡確實有的東西，不是判斷，也不是安全檢查。",
+      attachments: "附件",
+      attachmentUnnamed: "未命名檔案",
+      attachmentNoPreview: "沒有預覽圖",
+      attachmentCannotOpen: "這裡無法開啟。Dovis 目前還沒有可以取得附件的路徑。",
+      attachmentUnavailable: "Dovis 看到這個附件，但沒能記錄下來，資訊可能不完整。",
+      links: "連結",
+      linkText: "郵件中的連結文字",
+      linkExternal: "外部",
+      linkFullAddress: "完整網址",
+      linkHostUnreadable: "沒有可讀的主機名稱",
+      linkArm: "我要開啟這個連結",
+      linkOpen: "開啟",
+      linkNewTab: "在新分頁開啟",
+      linkNeverAuto: "這裡不會自動開啟任何連結。Dovis 不會因為郵件要求就去點它。",
+      linkRejectedScheme: "無法開啟：這個網址不是 http 或 https。",
+      linkRejectedUserinfo:
+        "無法開啟：@ 前面那段只是使用者名稱，真正會連到的是後面那個網域。",
+      linkRejectedIdn:
+        "無法開啟：這是國際化網域，這裡顯示的是它的 punycode 形式，因為可讀的寫法可以做得跟別的網域一模一樣。",
+      linkRejectedUnparseable: "無法開啟：這串文字沒辦法解讀成網址。",
+      moreNotShown: "另外 {n} 項未顯示。",
+    },
   },
 };
 
@@ -304,6 +377,54 @@ export const ATTENTION_LABELS: Record<
     action_soon: { label: "近期要處理", meaning: "期限或決定快到了" },
     urgent: { label: "緊急", meaning: "需要立即處理" },
     critical: { label: "嚴重", meaning: "牽涉重大的安全、金錢或時效風險" },
+  },
+};
+
+/*
+  The seven factual flags, in both languages.
+
+  Separate from `dict` and explicitly annotated for the same reason
+  ATTENTION_LABELS is: `Dict` is `typeof dict.en`, so a code missing from `en`
+  would only make `Dict` smaller and nothing would error. Annotating against
+  `EmailFlagCode` makes an eighth code a build failure in both languages
+  simultaneously, by name.
+
+  These are the only words a reader ever sees for a flag. The row carries a
+  code; the sentence is written here, by a person. That indirection is the whole
+  containment — without it, a sender who influenced the box could author their
+  own chip text in the boss's own font, in the place a warning belongs.
+
+  Every label states a fact flat, with no hedge, because every one of them IS a
+  fact. Notice equally what none of them does: none names a consequence, none
+  says whether any of this is a problem, and none of them is good news. "PDF
+  attachment" is not an accusation and "External sender" is not an alarm — the
+  reader is being handed what arrived, and the judging stays theirs.
+
+  snake_case keys break the camelCase house style deliberately, so
+  FLAG_LABELS[lang][code] is a direct index with no mapping table between the
+  union and the dictionary. A mapping table would be a third thing to keep in
+  sync and the first to rot.
+*/
+export const FLAG_LABELS: Record<Lang, Record<EmailFlagCode, string>> = {
+  en: {
+    attachment_received: "Attachment received",
+    pdf_attachment: "PDF attachment",
+    image_attachment: "Image attachment",
+    external_links: "Contains links",
+    external_sender: "External sender",
+    free_mailbox_sender: "Sent from a free mailbox",
+    // The header fact, not a claim about a company. Reply-To and From are two
+    // fields and this is a string comparison between them.
+    sender_domain_mismatch: "Reply-To domain differs from sender",
+  },
+  "zh-TW": {
+    attachment_received: "含有附件",
+    pdf_attachment: "PDF 附件",
+    image_attachment: "圖片附件",
+    external_links: "含有連結",
+    external_sender: "外部寄件者",
+    free_mailbox_sender: "由免費信箱寄出",
+    sender_domain_mismatch: "回覆網域與寄件網域不同",
   },
 };
 
