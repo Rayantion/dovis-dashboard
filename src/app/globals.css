@@ -327,4 +327,42 @@
       animation: none;
     }
   }
+
+  /*
+    Something is on the page that was not there a moment ago: a draft finished
+    loading, a judgement landed on a row, the queue admitted it is behind.
+
+    One pass, never a loop. The arrival is the whole message, and an alarm that
+    cannot be silenced is what a looping version of this would be. It is also
+    why nothing on mount wears it — see AttentionBlock, which decides whether a
+    block ARRIVED or was simply already there when the card rendered.
+  */
+  @keyframes dovis-appear {
+    from {
+      opacity: 0;
+      transform: translateY(-2px);
+    }
+  }
+
+  .animate-appear {
+    animation: dovis-appear 180ms ease-out;
+  }
+
+  /*
+    Not `animation: none`. Reduced motion asks for less movement, not less
+    information — a banner that materialises with no transition at all is easy
+    to miss entirely, which is the failure the banner exists to prevent. So the
+    travel goes and a fade under the ~100ms threshold stays.
+  */
+  @keyframes dovis-appear-fade {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-appear {
+      animation: dovis-appear-fade 80ms linear;
+    }
+  }
 }

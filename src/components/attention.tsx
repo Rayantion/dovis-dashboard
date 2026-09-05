@@ -87,6 +87,28 @@ export function AttentionBlock({
 }) {
   const { t, lang } = useI18n();
 
+  /*
+    A block animates when a judgement ARRIVES on a row that is already on the
+    page — never when a card that always had one mounts.
+
+    The difference is the whole point. Eight cards fading in on every load, and
+    again on every refetch, would make work the reader dealt with yesterday
+    look like it just came in; the animation would be saying something false.
+    So the previous level is kept and compared, and it starts at the CURRENT
+    level, which is what makes a mount count as "this was already here".
+
+    Setting state during render rather than in an effect is deliberate: React
+    re-runs this component before it commits, so the block's first appearance
+    on screen already carries the class. From an effect it would paint once at
+    full opacity and then jump back to zero to start the fade.
+  */
+  const [seen, setSeen] = React.useState(level);
+  const [arrived, setArrived] = React.useState(false);
+  if (level !== seen) {
+    setSeen(level);
+    setArrived(!isAttentionLevel(seen) && isAttentionLevel(level));
+  }
+
   // The type says this cannot be a stray string. The row it came from went
   // through a blind `as` cast from PostgREST, so it can.
   if (!isAttentionLevel(level)) return null;
@@ -99,6 +121,7 @@ export function AttentionBlock({
     <div
       className={cn(
         "squircle flex items-start gap-2.5 border px-3 py-2.5",
+        arrived && "animate-appear",
         LEVEL_BLOCK[level],
         className,
       )}
@@ -178,7 +201,14 @@ export function AttentionGuide() {
           aria-label={t.attentionGuide}
           className="ml-auto text-muted-foreground transition-colors hover:text-foreground lg:hidden"
         >
-          <ChevronDown className={cn("size-4", open && "rotate-180")} />
+          {/* Turns rather than flips, so the arrow reads as belonging to the
+              panel it is opening — same treatment as the queue's own chevron. */}
+          <ChevronDown
+            className={cn(
+              "size-4 transition-transform motion-reduce:transition-none",
+              open && "rotate-180",
+            )}
+          />
         </button>
       </div>
 

@@ -91,7 +91,14 @@ export function StaleBanner() {
   return (
     <div
       role="status"
-      className="border-t border-primary/20 bg-primary/8 text-primary"
+      /*
+        Mounts only when there is something to admit, so the fade marks the
+        moment the queue fell behind — and it is one pass. A banner that kept
+        moving would be an alarm the reader cannot switch off, and this is not
+        an alarm: it is a fact about the connection, and it stops being news the
+        instant it has been read.
+      */
+      className="animate-appear border-t border-primary/20 bg-primary/8 text-primary"
     >
       <div className="mx-auto max-w-5xl px-4 sm:px-5 py-2 flex items-center gap-3">
         <span className="text-xs font-medium">{message}</span>

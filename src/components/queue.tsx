@@ -52,6 +52,10 @@ export function StatusPill({ status }: { status: TodoStatus }) {
     <span
       className={cn(
         "inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+        // Status arrives over the socket and rewrites this pill under the
+        // reader's eyes. Easing the colour says "the same row moved on"; a
+        // hard cut at the same position reads as a different row arriving.
+        "transition-colors motion-reduce:transition-none",
         STATUS_STYLES[status],
       )}
     >
@@ -186,29 +190,54 @@ function QueueItem({ todo }: { todo: Todo }) {
             className="mt-2.5"
           />
 
-          {open ? (
-            <div className="mt-3 rounded-md border border-border bg-muted/40 p-3.5">
-              {loading ? (
-                <div className="space-y-2">
-                  <Skeleton className="h-3 w-1/3" />
-                  <Skeleton className="h-3 w-full" />
-                  <Skeleton className="h-3 w-4/5" />
-                </div>
-              ) : payload ? (
-                <PayloadView payload={payload} actionType={todo.action_type} />
-              ) : (
-                /*
-                  Denied and failed are different facts and must not share a
-                  sentence. "Could not load" told a read-only assistant the app
-                  was broken, when in fact it was working exactly as the owner
-                  configured it.
-                */
-                <p className="text-xs text-muted-foreground">
-                  {perms.canModify ? t.payloadFailed : t.draftsRestricted}
-                </p>
-              )}
+          {/*
+            `grid-template-rows: 0fr → 1fr`, not a max-height. A draft can be
+            two lines or forty, so any height picked here is wrong twice: it
+            clips the long ones, and on the short ones the ease spends most of
+            its time crossing space that has nothing in it, which reads as a
+            stall and then a snap. A grid row eases to whatever the content
+            actually measures.
+
+            The panel stays mounted so it can animate shut as well as open, and
+            is `inert` while closed — a zero-height box still holds focusable
+            things (the "original proposal" disclosure below), and somewhere the
+            keyboard can reach that the eye cannot is worse than no animation.
+          */}
+          <div
+            className={cn(
+              "grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+              open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+            )}
+          >
+            <div className="min-h-0 overflow-hidden" inert={!open}>
+              <div className="mt-3 rounded-md border border-border bg-muted/40 p-3.5">
+                {loading ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-3 w-1/3" />
+                    <Skeleton className="h-3 w-full" />
+                    <Skeleton className="h-3 w-4/5" />
+                  </div>
+                ) : payload ? (
+                  // Mounts exactly once, when the fetch lands — so the fade
+                  // marks the arrival of the draft and never replays on
+                  // re-open, when the panel opening is already the signal.
+                  <div className="animate-appear">
+                    <PayloadView payload={payload} actionType={todo.action_type} />
+                  </div>
+                ) : (
+                  /*
+                    Denied and failed are different facts and must not share a
+                    sentence. "Could not load" told a read-only assistant the app
+                    was broken, when in fact it was working exactly as the owner
+                    configured it.
+                  */
+                  <p className="text-xs text-muted-foreground">
+                    {perms.canModify ? t.payloadFailed : t.draftsRestricted}
+                  </p>
+                )}
+              </div>
             </div>
-          ) : null}
+          </div>
 
           {!decided && perms.canModify ? (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -249,7 +278,10 @@ function QueueItem({ todo }: { todo: Todo }) {
           className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
         >
           <ChevronDown
-            className={cn("size-4 transition-transform", open && "rotate-180")}
+            className={cn(
+              "size-4 transition-transform motion-reduce:transition-none",
+              open && "rotate-180",
+            )}
           />
         </button>
       </div>
