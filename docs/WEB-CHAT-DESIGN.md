@@ -2306,88 +2306,146 @@ language, and a `result: "成功"` is `malformed`. Localising the envelope would
 turn `verifyRecapReply` into a translation table and hand the box a second way to
 be misread; the prose is the only thing the hint may change.
 
-**VERIFIED FINDING: there is no authenticated dashboard language preference to
-derive from.** Language lives entirely in the browser. `LANG_STORAGE_KEY` is
-`"dovis.lang"` in `src/lib/i18n.ts`, and `ThemeProvider` in
-`src/components/theme-provider.tsx` reads it from `window.localStorage` on mount
-and writes it back in `setLang`. Nothing sends it anywhere. And `profiles` has no
-`lang` column: its columns are `id`, `email`, `username`, `display_name`, `role`,
-`status`, `can_modify`, `must_change_password`, `created_at` and
-`last_sign_in_at`. **So the server cannot today derive what the deployment owner
-asked it to derive**, and this has to be said before anything is built rather than discovered
-by an implementer reaching for a column that is not there.
+**That preference now exists.** When this section was first written the finding
+was the opposite, and it was recorded here as a blocker: language lived entirely
+in the browser, `LANG_STORAGE_KEY` was `"dovis.lang"` in `src/lib/i18n.ts`,
+nothing sent it anywhere, and `profiles` had no `lang` column — so the server
+could not derive what the deployment owner had asked it to derive. **That gap was
+closed rather than worked around, and everything below describes what shipped
+rather than what is proposed.** The column is in `supabase/schema.sql`, the route
+that writes it is `src/app/api/account/language/route.ts`, and the browser
+reconciles against it once per mount.
 
-**Recommendation: add `profiles.lang`, on exactly the pattern the deployment
-owner chose for the timezone the same day.** A server route under `service_role` after
-`requireProfile()`, seeded from the browser toggle the first time an authenticated
-viewer sets one, and thereafter the source of truth that `/api/recap` reads:
+**`profiles.lang`, built on exactly the pattern the deployment owner chose for
+the timezone the same day.** A server route under `service_role` after
+`requireProfile()`, seeded from the browser toggle the first time an
+authenticated viewer signs in, and thereafter the source of truth. The column
+itself is one line:
 
 ```sql
--- PENDING THE DEPLOYMENT OWNER'S DECISION. Not part of the migration list at the
--- foot until they say so; recorded here so the shape is not invented later under
--- time pressure.
-alter table public.profiles
-  add column if not exists lang text
-  check (lang in ('en','zh-TW'));
-
-comment on column public.profiles.lang is
-  'The account holder''s own display language, and the prompt hint /api/recap '
-  'sends. SELF-SET, unlike timezone, which is owner-controlled: an assistant who '
-  'reads Chinese must not be forced into the owner''s English. Written only by '
-  'the account route under service_role after requireProfile(), seeded once from '
-  'the browser toggle. NULL means nobody has chosen, and the route falls back to '
-  'the validated enum on the request. The CHECK is the whole guarantee: a column '
-  'that can only ever hold one of two literals cannot carry a prompt.';
+lang                  text check (lang in ('en','zh-TW'))
 ```
 
+It also arrives separately for databases created before it existed — an
+`alter table public.profiles add column if not exists lang text`, with the CHECK
+added inside a `do $$ ... $$` block guarded on `pg_constraint`, because
+`add constraint` has no `if not exists`. That is not belt-and-braces; `schema.sql`
+is re-run whole rather than as a migration chain, so `create table if not exists`
+is a no-op on an existing database and the column would otherwise never appear
+there. `schema.sql` now names this the `profiles.lang` pattern where
+`todos.attention` does the same thing, so the shape has a name to be copied by.
+
+**NULL means not initialised**, and that is the load-bearing part. It is not a
+default of English — it means nobody has said. `Profile.lang` in
+`src/lib/types.ts` is `Lang | null` and repeats the point in its own comment,
+because a reader who treats NULL as English will seed a Chinese reader's account
+wrong and then follow them onto every other device with it.
+
+The CHECK is the whole guarantee at the database end: a column that can only ever
+hold one of two literals cannot carry a prompt.
+
 **One deliberate divergence from the timezone, stated because the two routes will
-sit beside each other and look copy-pasteable.** `/api/account/timezone` refuses
-an assistant unconditionally, because the zone every recap renders times in
+sit beside each other and look copy-pasteable.** `/api/account/timezone` is still
+design — `src/app/api/account` holds `language` and nothing else — and when it is
+built it refuses an assistant unconditionally, because the zone every recap renders times in
 belongs to the account. Language is the opposite: it is a property of the reader,
 not of the account, and an assistant forced into the principal's language would be
 a worse product for no security gain. So the language route accepts a self-write
-from any active profile and an owner write against any row, and it is the one
-place in this design where those two differ.
+from any active profile — a read-only assistant included, because a preference is
+not a permission — and it is the one place in this design where those two differ.
+
+**What shipped is narrower than what this section originally proposed, in one
+respect worth naming.** The proposal was a self-write plus an owner write against
+any row. The route takes the account from the session and reads nothing from the
+body but the value: a body carrying `{ id, lang }` would let any signed-in
+account rewrite anyone's settings, and the id is the half that matters. An owner
+who wants to set an assistant's language therefore has no route for it, which is
+the right trade for a preference the assistant can set in one click themselves.
 
 **The incidental benefit, stated honestly because it is not what the deployment
-owner asked for.** Today a boss's language does not follow him between devices. It is one
-browser's `localStorage` key, so the same account opened on his phone comes up in
-English and he sets it again. A column fixes that, and that is a real improvement
-— but it is an improvement arriving on the back of a prompt hint, which is
-precisely the kind of scope drift this document is supposed to name rather than
-smuggle.
+owner asked for.** A boss's language now follows him between devices. It used to
+be one browser's `localStorage` key, so the same account opened on his phone came
+up in English and he set it again. The column fixes that, and it is a real
+improvement — but it arrived on the back of a prompt hint, which is precisely the
+kind of scope drift this document is supposed to name rather than smuggle, and
+naming it here is the price of having taken it.
 
-**The cost, equally honestly.** The existing toggle stops being a pure local
-preference and starts writing to the server: a network call, a failure path when
-that call fails, and two open tabs able to disagree until one reloads. The
-`localStorage` key stays as the first-paint source — the toggle must not wait on a
-fetch to render the right language on the first frame — with the column read at
-bootstrap and winning where the two differ. That is a second writer for one value,
-which is a small piece of real complexity in exchange for a hint. And it inherits
-the tightening above: with `and id <> auth.uid()` on `"owner updates"`, even the
-owner writes this through the route rather than through PostgREST.
+**The cost, equally honestly, and how it is paid.** The toggle stopped being a
+pure local preference and started writing to the server: a network call, a
+failure path when that call fails, and two open tabs able to disagree until one
+reloads. `persistLang` in `src/components/theme-provider.tsx` is deliberately
+unawaited and silent — a language preference is not worth a toast, the viewer's
+own session is already correct by the time the request goes out, and the only
+thing a failure costs is that the next device starts on the old answer. It is
+skipped entirely in demo mode, which has no account to write to. The
+`localStorage` key stays the first-paint source, because the toggle must not wait
+on a fetch to render the right language on the first frame. And the route still
+inherits the tightening above: with `and id <> auth.uid()` on `"owner updates"`,
+even the owner writes this through the route rather than through PostgREST.
 
-**The fair alternative, which needs no migration.** `/api/recap` accepts `lang`
-from the request body and validates it as exactly `'en' | 'zh-TW'`, rejecting
-anything else. That is a *claim* rather than a *record*, which is the distinction
-this document makes everywhere — but once the enum is enforced it is not
-*arbitrary* data, and the blast radius is one prompt hint on the caller's own
-recap. The worst a hostile or buggy client achieves is prose in the other
-language on its own screen. It is the same reasoning that already accepts the
-browser's zone as the last tier of the timezone ladder: a display preference is
-safe to take from a client in a way a timestamp is not.
+Two details in that provider look like redundancy and are not, so both are
+recorded here rather than left to be discovered and simplified away.
 
-**THE DEPLOYMENT OWNER'S DECISION, still pending.** It is theirs because it widens
-what they asked for: they asked for a prompt hint and the honest way to give them
-one is a schema change, a route, and a toggle that talks to the server. It also edits a line
-already in this document's out-of-scope list — *"Default language is set by
-Hermes, not chosen in the dashboard. The existing EN / zh-TW toggle stays a
-per-viewer override"* — and a per-viewer override that persists per account is no
-longer only a per-viewer override. **Recommendation is the column**, because
-"derive from the authenticated preference" is what they actually said and the
-validated enum is a knowing second-best. Until they choose, `/api/recap` resolves
-the hint the way the timezone resolves: `profiles.lang` if the column exists and
-is set, otherwise the validated enum from the request, otherwise `en`.
+**`adoptLang` exists separately from `setLang`.** Both write React state, the
+`localStorage` key and `document.documentElement.lang`; only `setLang` also
+POSTs. Adopting a value that came *from* the server and sending it straight back
+would be an echo — a write on every sign-in, on every device, for a value nobody
+changed. The split is the whole reason the toggle is a writer and the reconcile
+is a reader, and collapsing the two into one function would turn every page load
+into a database write.
+
+**The seed reads `localStorage` directly rather than the context.** The reconcile
+in `src/lib/dovis-provider.tsx` watches `session` rather than living inside
+`boot()`, because a session also arrives through `signIn` and someone signing in
+on a borrowed laptop should get their own language rather than whatever the last
+person left in that browser. A ref holds it to once per mount: without it, any
+later change to `session` — a password change rewrites the profile object — would
+re-adopt and undo a toggle the viewer had just used. When `session.profile.lang`
+is set it is adopted; when it is NULL this browser's own answer becomes the
+account's. That last step reads `window.localStorage` rather than `lang` from
+context because `ThemeProvider` adopts the stored value in an effect of its own
+that has not necessarily run yet — the context value can still be the `"en"`
+default at that moment, and seeding a Chinese reader's account with English is a
+silent wrong answer that then follows them everywhere.
+
+`tests/language-route.test.ts` pins the two properties that make the route
+narrower than the policy it stands in for: the account comes from the session and
+never from the body, and the value comes from the two-item union. Around those it
+pins the assistant being accepted, non-string values a loose check would let
+through being refused, the rejected value not being echoed back into a log, a
+malformed body and an unauthenticated caller being refused before the database is
+touched, a paused account being refused upstream by `requireProfile()`, and a
+database failure surfacing rather than reporting success.
+
+**The alternative that was not taken, recorded so it is not re-proposed.**
+`/api/recap` could have accepted `lang` from the request body and validated it as
+exactly `'en' | 'zh-TW'`. That is a *claim* rather than a *record*, which is the
+distinction this document draws everywhere — but once the enum is enforced it is
+not *arbitrary* data, and the worst a hostile or buggy client achieves is prose
+in the other language on its own screen. It was a knowing second-best rather than
+a bad idea, and it lost because "derive from the authenticated dashboard
+preference" is what the deployment owner actually said and a column was the
+honest way to give it to them.
+
+**What this changes about the out-of-scope list, said plainly rather than edited
+in quietly.** That list still carries *"Default language is set by Hermes, not
+chosen in the dashboard. The existing EN / zh-TW toggle stays a per-viewer
+override"*, decided 2026-09-03. The first half is untouched: the box's own
+default is still the box's, and nothing here chooses it. The second half now
+reads narrower than what shipped, because a per-viewer override that persists per
+account is no longer only a per-viewer override. The line is left as written and
+this paragraph is the correction, so that a reader who finds the two does not
+have to guess which is newer.
+
+**None of this makes the recap itself real.** `/api/recap` does not exist —
+`src/app/api` holds `account`, `act`, `auth`, `google`, `health`, `payload`,
+`queue` and `team`, and nothing else. Catch me up remains design only.
+`profiles.lang` is simply the one piece of its groundwork that was worth building
+ahead of the feature, because it is useful on its own the moment a boss opens the
+dashboard on a second device. When the route is built it reads `profiles.lang`
+for the caller and falls back to `en` where the column is still NULL, because a
+hint nobody chose is a guess and English is the seeded default everywhere else in
+this document.
 
 ### Accessibility
 
@@ -2742,34 +2800,25 @@ hours to a destructive card, and no escalation touches a mark) and **the languag
 hint** (`/api/recap` sends it,
 derived server-side, with the envelope staying language-independent).
 
-Two things remain, and they are different in kind. One is a decision the third
-round created rather than closed. The other is not a decision at all — it is a
-fact about the box that nobody here can settle by thinking harder.
+The third round created one further decision rather than closing it —
+**`profiles.lang`, the authenticated preference the language hint has to derive
+from.** It went the way the recommendation pointed, and it has since been built:
+the column is in `schema.sql`, `/api/account/language` writes it against the
+caller's own row, `Profile.lang` carries it, and the browser adopts it once per
+mount. The passage above describes what shipped rather than what was proposed,
+including the one place where the route came out narrower than the proposal.
 
-1. **`profiles.lang` — the deployment owner's, and the reason it is open is that
-   answering them properly costs more than they asked for.** They said the server must derive the
-   language from the authenticated dashboard preference. There is no such
-   preference: language is `localStorage["dovis.lang"]`, read and written in
-   `theme-provider.tsx`, and `profiles` has no `lang` column. So the fork is a
-   column plus a route plus a toggle that starts talking to the server, against a
-   validated `'en' | 'zh-TW'` on the request — a claim rather than a record, but
-   not arbitrary once the enum is enforced, and no worse in its worst case than
-   prose in the wrong language on the caller's own screen. **The recommendation is
-   the column**, because it is what they actually said and because it incidentally
-   fixes a real thing: today a boss's language does not follow him to his phone.
-   The argument in full, including the divergence from the timezone route, sits
-   with the strings above. **It blocks nothing.** The request turn carries `lang`
-   either way, so the wire shape does not change and the column can arrive after
-   the feature ships.
-2. **Can Hermes echo the turn id back on the reply?** A yes/no from the box, and
-   the only outstanding item that changes code rather than copy. With the echo,
-   the confirmation route pairs a reply to its request turn by id and the boss may
-   type freely during a run. Without it, the route falls back to the
-   unanswered-turn rule and refuses every confirmation where the boss typed while
-   a run was in flight — correct, and quietly more expensive than it sounds. It is
-   already on the asks list below; it is repeated here because it is the one
-   answer that decides which of two branches gets built, and the validator is
-   pinned to that branch by a module constant rather than by inference.
+**One question remains, and it is not a decision at all** — it is a fact about
+the box that nobody here can settle by thinking harder. **Can Hermes echo the
+turn id back on the reply?** A yes/no from the box, and the only outstanding item
+that changes code rather than copy. With the echo, the confirmation route pairs a
+reply to its request turn by id and the boss may type freely during a run.
+Without it, the route falls back to the unanswered-turn rule and refuses every
+confirmation where the boss typed while a run was in flight — correct, and
+quietly more expensive than it sounds. It is already on the asks list below; it
+is repeated here because it is the one answer that decides which of two branches
+gets built, and the validator is pinned to that branch by a module constant
+rather than by inference.
 
 **What is deliberately not on this list.** The escalation thresholds — 24 hours,
 three consecutive blind runs in the chat, 72 hours on the Google card, twenty
@@ -2833,8 +2882,11 @@ one, so each table is altered exactly once:
   depends on, since routing the owner's own settings through a server route buys
   nothing while the browser can write the row directly
 
-`profiles.lang` is **not** on that list, because it is the deployment owner's
-decision and it is still open. If they take the column, it joins the `profiles`
-bullet and the table is still altered once; if they leave it, the validated enum
-on the request needs no migration at all. That is the only reason the two are worth deciding before the
-migration is written rather than after.
+`profiles.lang` is not on that list because it is already in `schema.sql`. It
+shipped ahead of the recap, with `/api/account/language` and the browser
+reconcile, so the language hint has a preference to derive from before there is a
+route to send it. A database created before the column existed picks it up from
+the `alter table ... add column if not exists` sitting under the `create table`,
+since this file is re-run whole rather than as a migration chain — which is why
+it needs no entry in a migration list that exists for the columns arriving with
+the chat.

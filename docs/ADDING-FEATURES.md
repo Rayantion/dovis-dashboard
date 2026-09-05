@@ -104,6 +104,13 @@ Then test with a real item of the new type. Testing with a `manual` item proves
 nothing: `manual` stamps `done` without acting, so it passes even when the
 executor is completely broken.
 
+**When *not* to propose one at all** is the other half of this, and it lives in
+`QUEUE-POLICY.md`. A todo is created only when a message needs a concrete
+decision or task from the principal; important informational mail is summarised
+without one, and routine mail leaves nothing but a count. Read it before teaching
+the executor to insert rows of a new type — an action type with a real tool
+behind it can still ruin the queue by being used on everything that arrives.
+
 ---
 
 ## 4. Add a page
